@@ -26,7 +26,11 @@ func StorageInfo() (Storage, error) {
 	if err != nil {
 		return Storage{}, err
 	}
-	total, available, err := diskCapacity(home)
+	return storageInfoAt(home)
+}
+
+func storageInfoAt(path string) (Storage, error) {
+	total, available, err := diskCapacity(path)
 	return Storage{Total: total, Available: available, Categories: []StorageCategory{}}, err
 }
 

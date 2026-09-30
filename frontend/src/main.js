@@ -1,5 +1,5 @@
 import './style.css';
-import { Scan, StorageInfo, ScanStorage, PreviewCleanup, ExecuteCleanup, RevealPath } from '../wailsjs/go/main/App';
+import { Analyze, StorageInfo, PreviewCleanup, ExecuteCleanup, RevealPath } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 
 const $ = (selector) => document.querySelector(selector);
@@ -134,8 +134,7 @@ async function refresh(){
  busy=true;scanValid=false;items.clear();clearTimeout(timer);timer=null;
  $('#refresh').disabled=true;$('#refresh').textContent='분석 중…';$('#error').textContent='';render();
  const results=await Promise.allSettled([
-  Scan('~').then(result=>{items=new Map(result.items.map(i=>[i.id,i]));scanValid=true;}),
-  ScanStorage().then(drawStorage),
+  Analyze('~').then(analysis=>{items=new Map(analysis.result.items.map(i=>[i.id,i]));drawStorage(analysis.storage);scanValid=true;}),
  ]);
  busy=false;clearTimeout(timer);timer=null;render();
  $('#refresh').disabled=false;$('#refresh').textContent='다시 분석';$('#progress').textContent='';

@@ -47,6 +47,21 @@ func (a *App) Scan(root string) (*core.Result, error) {
 	return result, nil
 }
 
+func (a *App) Analyze(root string) (*core.Analysis, error) {
+	analysis, err := core.AnalyzeWithProgress(root, func(progress core.Progress) {
+		if a.ctx != nil {
+			wailsruntime.EventsEmit(a.ctx, "scan:progress", progress)
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.lastScan = analysis.Result
+	a.mu.Unlock()
+	return analysis, nil
+}
+
 func (a *App) Rules() []core.Rule {
 	return core.Rules()
 }
