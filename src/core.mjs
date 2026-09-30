@@ -56,7 +56,7 @@ const globalRules = [
   { id: 'jetbrains.cache', name: 'JetBrains IDE cache', tier: 'safe', category: 'IDE cache', paths: () => platformPath({ darwin: '~/Library/Caches/JetBrains', linux: '~/.cache/JetBrains', windows: '%LocalAppData%/JetBrains' }), native: 'Close the IDE, then use Invalidate Caches', rebuild: 'Open the IDE again', cost: 'low' },
 ];
 
-const protectedNames = new Set(['.git', '.ssh', '.gnupg', 'Documents', 'Desktop', 'Pictures', 'Movies', 'Music', 'Library/Keychains']);
+const protectedNames = new Set(['.git', '.ssh', '.gnupg', '.config', 'Documents', 'Desktop', 'Pictures', 'Movies', 'Music', 'Library/Keychains', 'Application Support']);
 
 function isProtected(p) {
   const normalized = path.normalize(p);
@@ -64,7 +64,12 @@ function isProtected(p) {
   const rel = path.relative(home(), normalized);
   // Explicitly scanned fixture or project roots outside HOME are allowed. System
   // locations are never discovered by the default scan and are rejected below.
-  if (rel.startsWith('..')) return normalized === path.parse(normalized).root || normalized.startsWith('/System/');
+  if (rel.startsWith('..')) {
+    if (normalized === path.parse(normalized).root) return true;
+    if (process.platform === 'darwin') return normalized.startsWith('/System/') || normalized.startsWith('/Library/');
+    if (process.platform === 'linux') return ['/etc/', '/usr/', '/bin/', '/sbin/', '/var/lib/'].some((prefix) => normalized.startsWith(prefix));
+    if (process.platform === 'win32') return /^[A-Za-z]:[\\/](Windows|Program Files|ProgramData)(?:[\\/]|$)/i.test(normalized);
+  }
   if (!rel) return true;
   const parts = rel.split(path.sep);
   if (parts.some((part) => protectedNames.has(part))) return true;
