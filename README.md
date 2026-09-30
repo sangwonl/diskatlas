@@ -39,4 +39,5 @@ shed quarantine purge              # intentionally blocked
 shed history
 shed doctor
 shed gui [--port 4173] [--no-open]
+shed rules list|show <rule-id> [--json]
 ```

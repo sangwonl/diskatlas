@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { scan, summarize, formatBytes, TIERS } from '../src/core.mjs';
+import { scan, summarize, formatBytes, TIERS, globalRules, projectRules } from '../src/core.mjs';
 import { startServer } from '../src/server.mjs';
 
 const cwd = process.cwd();
@@ -45,6 +45,14 @@ function printSummary(result) {
 
 async function run() {
   if (command === 'gui') return startServer({ port: Number(value('--port') || 4173), open: !flag('--no-open') });
+  if (command === 'rules') {
+    const allRules = [...projectRules, ...globalRules].map((rule) => ({ id: rule.id, name: rule.name, kind: rule.markers ? 'project' : 'global', tier: rule.tier, category: rule.category, rebuild: rule.rebuild, cost: rule.cost }));
+    const requested = args[1] === 'show' ? args[2] : (args[1] && args[1] !== 'list' ? args[1] : null);
+    const selected = requested ? allRules.filter((rule) => rule.id === requested) : allRules;
+    if (flag('--json')) printJson(selected); else selected.forEach((rule) => console.log(`${tierIcon(rule.tier)} ${rule.id.padEnd(24)} ${rule.name} · ${rule.kind} · rebuild: ${rule.rebuild}`));
+    if (requested && !selected.length) { console.error(`Unknown rule: ${requested}`); process.exitCode = 1; }
+    return;
+  }
   if (command === 'scan') {
     await ensureState();
     const result = await scan(pathsFromArgs().length ? pathsFromArgs() : [os.homedir()]);
