@@ -29,10 +29,10 @@ The current implementation is dependency-free Node.js 22 code. The core boundari
 
 ```text
 shed scan [paths...] [--json]
-shed report [--tier safe|caution|review|protected] [--json]
+shed report [--tier safe|caution|review|protected] [--ecosystem node|python] [--min-size 1GB] [--older 90d] [--include path] [--exclude path] [--json]
 shed explain <path|rule-id> [--json]
-shed plan [--json]
-shed clean [--dry-run] [--quarantine --yes]
+shed plan [filters] [--json]
+shed clean [filters] [--dry-run] [--quarantine --yes]
 shed restore <batch|--last>
 shed quarantine list
 shed quarantine purge              # intentionally blocked

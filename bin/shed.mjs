@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { scan, summarize, formatBytes, TIERS, globalRules, projectRules } from '../src/core.mjs';
+import { scan, summarize, formatBytes, TIERS, globalRules, projectRules, isProtected } from '../src/core.mjs';
 import { startServer } from '../src/server.mjs';
 
 const cwd = process.cwd();
@@ -20,6 +20,32 @@ function pathsFromArgs() { return args.slice(1).filter((x) => !x.startsWith('-')
 function printJson(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 function tierIcon(tier) { return { safe: '🟢', caution: '🟡', review: '🟠', protected: '🔴' }[tier]; }
 function insideHome(p) { const home = os.homedir(); const resolved = path.resolve(p); return resolved === home || resolved.startsWith(`${home}${path.sep}`); }
+function parseSize(input) {
+  if (!input) return 0;
+  const match = String(input).trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb|tb)?$/);
+  if (!match) return 0;
+  const unit = { b: 1, kb: 1024, mb: 1024 ** 2, gb: 1024 ** 3, tb: 1024 ** 4 }[match[2] || 'b'];
+  return Number(match[1]) * unit;
+}
+function filterItems(items) {
+  const tier = value('--tier');
+  const ecosystem = value('--ecosystem');
+  const minSize = parseSize(value('--min-size'));
+  const older = value('--older');
+  const days = older ? Number(String(older).replace(/d$/i, '')) : 0;
+  const cutoff = days > 0 ? Date.now() - days * 86400000 : 0;
+  const include = value('--include');
+  const exclude = value('--exclude');
+  return items.filter((item) => {
+    if (tier && item.tier !== tier) return false;
+    if (ecosystem && !item.ruleId.startsWith(ecosystem)) return false;
+    if (item.bytes < minSize) return false;
+    if (cutoff && (!item.modifiedAt || Date.parse(item.modifiedAt) > cutoff)) return false;
+    if (include && !item.path.includes(include)) return false;
+    if (exclude && item.path.includes(exclude)) return false;
+    return true;
+  });
+}
 
 async function loadScan() {
   try { return JSON.parse(await fs.readFile(lastScanPath, 'utf8')); }
@@ -63,9 +89,7 @@ async function run() {
   const result = await loadScan();
   if (!result) { console.error('No scan found. Run `shed scan` first.'); process.exitCode = 1; return; }
   if (command === 'report') {
-    let items = result.items;
-    const tier = value('--tier');
-    if (tier) items = items.filter((item) => item.tier === tier);
+    const items = filterItems(result.items);
     if (flag('--json')) printJson(items); else items.forEach((item) => console.log(`${tierIcon(item.tier)} ${formatBytes(item.bytes).padStart(10)} ${item.name}\n   ${item.path}`));
     return;
   }
@@ -82,7 +106,7 @@ async function run() {
     return;
   }
   if (command === 'plan') {
-    const plan = result.items.filter((item) => item.tier === 'safe').sort((a, b) => b.bytes - a.bytes).slice(0, 20);
+    const plan = filterItems(result.items).filter((item) => item.tier === 'safe').sort((a, b) => b.bytes - a.bytes).slice(0, 20);
     if (flag('--json')) printJson(plan); else {
       console.log('Recommended low-risk cleanup plan (safe tier only)');
       plan.forEach((item, index) => console.log(`${String(index + 1).padStart(2)}. ${formatBytes(item.bytes).padStart(10)} ${item.name} — ${item.path}`));
@@ -90,7 +114,7 @@ async function run() {
     return;
   }
   if (command === 'clean') {
-    const candidates = result.items.filter((item) => item.tier === 'safe' && item.clean !== 'blocked');
+    const candidates = filterItems(result.items).filter((item) => item.tier === 'safe' && item.clean !== 'blocked');
     if (flag('--json')) return printJson({ dryRun: true, candidates });
     const total = candidates.reduce((sum, item) => sum + item.bytes, 0);
     if (flag('--quarantine') && flag('--yes')) {
@@ -103,6 +127,10 @@ async function run() {
         // excludes /System, /tmp fixtures, and arbitrary external volumes.
         if (!insideHome(item.path)) continue;
         const source = path.resolve(item.path);
+        if (isProtected(source)) continue;
+        let currentStat;
+        try { currentStat = await fs.lstat(source); } catch { continue; }
+        if (currentStat.isSymbolicLink() || (!currentStat.isDirectory() && !currentStat.isFile())) continue;
         const destination = path.join(quarantineRoot, encodeURIComponent(source));
         try {
           await fs.mkdir(path.dirname(destination), { recursive: true });
