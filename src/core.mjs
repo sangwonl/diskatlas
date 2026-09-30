@@ -37,23 +37,23 @@ function platformPath({ darwin, linux, windows, env }) {
 }
 
 const globalRules = [
-  { id: 'npm.cache', name: 'npm cache', tier: 'safe', category: 'Package cache', paths: () => platformPath({ darwin: '~/.npm/_cacache', linux: '~/.npm/_cacache', windows: '%LocalAppData%/npm-cache', env: 'npm_config_cache' }), rebuild: 'npm install', cost: 'low' },
-  { id: 'pnpm.store', name: 'pnpm store', tier: 'safe', category: 'Package cache', paths: () => process.env.PNPM_STORE_PATH ? expand(process.env.PNPM_STORE_PATH) : platformPath({ darwin: '~/Library/pnpm/store', linux: '~/.local/share/pnpm/store', windows: '%LocalAppData%/pnpm/store' }), rebuild: 'pnpm install', cost: 'low' },
-  { id: 'pip.cache', name: 'pip cache', tier: 'safe', category: 'Package cache', paths: () => platformPath({ darwin: '~/Library/Caches/pip', linux: '~/.cache/pip', windows: '%LocalAppData%/pip/Cache' }), rebuild: 'python -m pip install', cost: 'low' },
-  { id: 'go.build-cache', name: 'Go build cache', tier: 'safe', category: 'Build cache', paths: () => process.env.GOCACHE ? expand(process.env.GOCACHE) : platformPath({ darwin: '~/Library/Caches/go-build', linux: '~/.cache/go-build', windows: '%LocalAppData%/go-build' }), rebuild: 'go build ./...', cost: 'low' },
-  { id: 'go.mod-cache', name: 'Go module cache', tier: 'safe', category: 'Package cache', paths: () => process.env.GOMODCACHE ? expand(process.env.GOMODCACHE) : platformPath({ darwin: '~/go/pkg/mod', linux: '~/go/pkg/mod', windows: '%UserProfile%/go/pkg/mod' }), rebuild: 'go mod download', cost: 'medium' },
-  { id: 'cargo.registry', name: 'Cargo registry', tier: 'safe', category: 'Package cache', paths: () => expand(path.join(process.env.CARGO_HOME || '~/.cargo', 'registry')), rebuild: 'cargo fetch', cost: 'medium' },
+  { id: 'npm.cache', name: 'npm cache', tier: 'safe', category: 'Package cache', paths: () => platformPath({ darwin: '~/.npm/_cacache', linux: '~/.npm/_cacache', windows: '%LocalAppData%/npm-cache', env: 'npm_config_cache' }), native: 'npm cache clean --force', rebuild: 'npm install', cost: 'low' },
+  { id: 'pnpm.store', name: 'pnpm store', tier: 'safe', category: 'Package cache', paths: () => process.env.PNPM_STORE_PATH ? expand(process.env.PNPM_STORE_PATH) : platformPath({ darwin: '~/Library/pnpm/store', linux: '~/.local/share/pnpm/store', windows: '%LocalAppData%/pnpm/store' }), native: 'pnpm store prune', rebuild: 'pnpm install', cost: 'low' },
+  { id: 'pip.cache', name: 'pip cache', tier: 'safe', category: 'Package cache', paths: () => platformPath({ darwin: '~/Library/Caches/pip', linux: '~/.cache/pip', windows: '%LocalAppData%/pip/Cache' }), native: 'pip cache purge', rebuild: 'python -m pip install', cost: 'low' },
+  { id: 'go.build-cache', name: 'Go build cache', tier: 'safe', category: 'Build cache', paths: () => process.env.GOCACHE ? expand(process.env.GOCACHE) : platformPath({ darwin: '~/Library/Caches/go-build', linux: '~/.cache/go-build', windows: '%LocalAppData%/go-build' }), native: 'go clean -cache', rebuild: 'go build ./...', cost: 'low' },
+  { id: 'go.mod-cache', name: 'Go module cache', tier: 'safe', category: 'Package cache', paths: () => process.env.GOMODCACHE ? expand(process.env.GOMODCACHE) : platformPath({ darwin: '~/go/pkg/mod', linux: '~/go/pkg/mod', windows: '%UserProfile%/go/pkg/mod' }), native: 'go clean -modcache', rebuild: 'go mod download', cost: 'medium' },
+  { id: 'cargo.registry', name: 'Cargo registry', tier: 'safe', category: 'Package cache', paths: () => expand(path.join(process.env.CARGO_HOME || '~/.cargo', 'registry')), native: 'cargo cache --autoclean', rebuild: 'cargo fetch', cost: 'medium' },
   { id: 'maven.repository', name: 'Maven repository', tier: 'safe', category: 'Package cache', paths: () => expand('~/.m2/repository'), rebuild: 'mvn dependency:resolve', cost: 'medium' },
-  { id: 'gradle.cache', name: 'Gradle cache', tier: 'safe', category: 'Build cache', paths: () => expand('~/.gradle/caches'), rebuild: './gradlew build', cost: 'medium' },
-  { id: 'xcode.derived-data', name: 'Xcode DerivedData', tier: 'safe', category: 'IDE cache', paths: () => process.platform === 'darwin' ? expand('~/Library/Developer/Xcode/DerivedData') : null, rebuild: 'Build the Xcode project again', cost: 'medium' },
+  { id: 'gradle.cache', name: 'Gradle cache', tier: 'safe', category: 'Build cache', paths: () => expand('~/.gradle/caches'), native: './gradlew --stop && remove Gradle caches', rebuild: './gradlew build', cost: 'medium' },
+  { id: 'xcode.derived-data', name: 'Xcode DerivedData', tier: 'safe', category: 'IDE cache', paths: () => process.platform === 'darwin' ? expand('~/Library/Developer/Xcode/DerivedData') : null, native: 'Close Xcode, then remove DerivedData from Xcode Settings', rebuild: 'Build the Xcode project again', cost: 'medium' },
   { id: 'xcode.device-support', name: 'iOS DeviceSupport', tier: 'caution', category: 'IDE cache', paths: () => process.platform === 'darwin' ? expand('~/Library/Developer/Xcode/iOS DeviceSupport') : null, rebuild: 'Reconnect the device in Xcode', cost: 'high' },
   { id: 'xcode.archives', name: 'Xcode Archives', tier: 'review', category: 'IDE data', paths: () => process.platform === 'darwin' ? expand('~/Library/Developer/Xcode/Archives') : null, rebuild: 'Archives are not automatically reproducible', cost: 'high' },
-  { id: 'android.avd', name: 'Android virtual devices', tier: 'caution', category: 'Emulator data', paths: () => platformPath({ darwin: '~/.android/avd', linux: '~/.android/avd', windows: '%UserProfile%/.android/avd' }), rebuild: 'Create the emulator again in Android Studio', cost: 'high' },
+  { id: 'android.avd', name: 'Android virtual devices', tier: 'caution', category: 'Emulator data', paths: () => platformPath({ darwin: '~/.android/avd', linux: '~/.android/avd', windows: '%UserProfile%/.android/avd' }), native: 'Delete unused virtual devices in Android Studio', rebuild: 'Create the emulator again in Android Studio', cost: 'high' },
   { id: 'huggingface.models', name: 'Hugging Face model cache', tier: 'caution', category: 'AI model', paths: () => process.env.HF_HOME ? expand(path.join(process.env.HF_HOME, 'hub')) : platformPath({ darwin: '~/.cache/huggingface/hub', linux: '~/.cache/huggingface/hub', windows: '%UserProfile%/.cache/huggingface' }), rebuild: 'huggingface-cli download <model>', cost: 'high' },
   { id: 'ollama.models', name: 'Ollama models', tier: 'caution', category: 'AI model', paths: () => platformPath({ darwin: '~/.ollama/models', linux: '~/.ollama/models', windows: '%UserProfile%/.ollama/models', env: 'OLLAMA_MODELS' }), rebuild: 'ollama pull <model>', cost: 'high' },
   { id: 'lmstudio.models', name: 'LM Studio models', tier: 'caution', category: 'AI model', paths: () => expand('~/.lmstudio/models'), rebuild: 'Download the model again in LM Studio', cost: 'high' },
-  { id: 'conda.packages', name: 'Conda package cache', tier: 'safe', category: 'Package cache', paths: () => expand('~/miniconda3/pkgs'), rebuild: 'conda install <package>', cost: 'medium' },
-  { id: 'jetbrains.cache', name: 'JetBrains IDE cache', tier: 'safe', category: 'IDE cache', paths: () => platformPath({ darwin: '~/Library/Caches/JetBrains', linux: '~/.cache/JetBrains', windows: '%LocalAppData%/JetBrains' }), rebuild: 'Open the IDE again', cost: 'low' },
+  { id: 'conda.packages', name: 'Conda package cache', tier: 'safe', category: 'Package cache', paths: () => expand('~/miniconda3/pkgs'), native: 'conda clean --all', rebuild: 'conda install <package>', cost: 'medium' },
+  { id: 'jetbrains.cache', name: 'JetBrains IDE cache', tier: 'safe', category: 'IDE cache', paths: () => platformPath({ darwin: '~/Library/Caches/JetBrains', linux: '~/.cache/JetBrains', windows: '%LocalAppData%/JetBrains' }), native: 'Close the IDE, then use Invalidate Caches', rebuild: 'Open the IDE again', cost: 'low' },
 ];
 
 const protectedNames = new Set(['.git', '.ssh', '.gnupg', 'Documents', 'Desktop', 'Pictures', 'Movies', 'Music', 'Library/Keychains']);
@@ -147,6 +147,7 @@ function itemFrom(rule, targetPath, projectPath, size, hasLockfile = false) {
     signals: classification.signals,
     explanation: why,
     rebuild: rule.rebuild,
+    native: rule.native || null,
     cost: rule.cost,
     clean: classification.tier === 'protected' ? 'blocked' : 'quarantine',
   };

@@ -72,7 +72,7 @@ function printSummary(result) {
 async function run() {
   if (command === 'gui') return startServer({ port: Number(value('--port') || 4173), open: !flag('--no-open') });
   if (command === 'rules') {
-    const allRules = [...projectRules, ...globalRules].map((rule) => ({ id: rule.id, name: rule.name, kind: rule.markers ? 'project' : 'global', tier: rule.tier, category: rule.category, rebuild: rule.rebuild, cost: rule.cost }));
+    const allRules = [...projectRules, ...globalRules].map((rule) => ({ id: rule.id, name: rule.name, kind: rule.markers ? 'project' : 'global', tier: rule.tier, category: rule.category, rebuild: rule.rebuild, native: rule.native || null, cost: rule.cost }));
     const requested = args[1] === 'show' ? args[2] : (args[1] && args[1] !== 'list' ? args[1] : null);
     const selected = requested ? allRules.filter((rule) => rule.id === requested) : allRules;
     if (flag('--json')) printJson(selected); else selected.forEach((rule) => console.log(`${tierIcon(rule.tier)} ${rule.id.padEnd(24)} ${rule.name} · ${rule.kind} · rebuild: ${rule.rebuild}`));
@@ -101,6 +101,7 @@ async function run() {
       console.log(`${tierIcon(item.tier)} ${item.tier} · ${item.ruleId} · ${formatBytes(item.bytes)} · ${item.path}`);
       console.log(`\nWhy\n  ${item.explanation}`);
       console.log(`\nHow to rebuild\n  ${item.rebuild}  (cost: ${item.cost})`);
+      if (item.native) console.log(`\nNative cleanup guide\n  ${item.native}\n  Shed does not execute native cleanup commands automatically.`);
       console.log(`\nHow Shed handles it\n  ${item.clean === 'blocked' ? 'Protected: selection is blocked.' : 'Moves it to a local quarantine; no permanent delete is performed.'}`);
     }
     return;
