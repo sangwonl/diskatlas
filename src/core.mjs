@@ -162,6 +162,13 @@ async function findProjects(root, options = {}) {
     let entries;
     try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
     const names = new Set(entries.map((entry) => entry.name));
+    let ignored = new Set();
+    if (names.has('.shedignore')) {
+      try {
+        const text = await fs.readFile(path.join(dir, '.shedignore'), 'utf8');
+        ignored = new Set(text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith('#')).map((line) => line.replace(/\/$/, '')));
+      } catch { /* an unreadable ignore file does not hide candidates */ }
+    }
     for (const rule of projectRules) {
       const marker = rule.markers.find((m) => m.startsWith('*')
         ? entries.some((entry) => entry.name.endsWith(m.slice(1)))
@@ -169,6 +176,7 @@ async function findProjects(root, options = {}) {
       if (!marker) continue;
       const hasLockfile = Boolean(rule.lockfiles?.some((lock) => names.has(lock)));
       for (const target of rule.targets) {
+        if (ignored.has(target)) continue;
         const targetPath = path.join(dir, target);
         const st = await statSafe(targetPath);
         if (!st || st.isSymbolicLink() || (!st.isDirectory() && !st.isFile())) continue;
@@ -178,6 +186,7 @@ async function findProjects(root, options = {}) {
     }
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+      if (ignored.has(entry.name)) continue;
       if (['.git', 'node_modules', 'target', '.next', '.venv', 'venv', 'Library', 'Applications'].includes(entry.name)) continue;
       await visit(path.join(dir, entry.name));
       if (results.length >= maxProjects) return;

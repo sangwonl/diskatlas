@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { scan, summarize, formatBytes, TIERS, globalRules, projectRules, isProtected } from '../src/core.mjs';
 import { startServer } from '../src/server.mjs';
@@ -20,6 +21,11 @@ function pathsFromArgs() { return args.slice(1).filter((x) => !x.startsWith('-')
 function printJson(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 function tierIcon(tier) { return { safe: '🟢', caution: '🟡', review: '🟠', protected: '🔴' }[tier]; }
 function insideHome(p) { const home = os.homedir(); const resolved = path.resolve(p); return resolved === home || resolved.startsWith(`${home}${path.sep}`); }
+function isInUse(p) {
+  if (process.platform === 'win32') return false;
+  const result = spawnSync('lsof', ['-t', '+D', p], { encoding: 'utf8', timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] });
+  return result.status === 0 && Boolean(result.stdout?.trim());
+}
 function parseSize(input) {
   if (!input) return 0;
   const match = String(input).trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb|tb)?$/);
@@ -132,6 +138,7 @@ async function run() {
         let currentStat;
         try { currentStat = await fs.lstat(source); } catch { continue; }
         if (currentStat.isSymbolicLink() || (!currentStat.isDirectory() && !currentStat.isFile())) continue;
+        if (isInUse(source)) { manifest.push({ ...item, error: 'Path is currently in use' }); continue; }
         const destination = path.join(quarantineRoot, encodeURIComponent(source));
         try {
           await fs.mkdir(path.dirname(destination), { recursive: true });

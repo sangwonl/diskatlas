@@ -19,6 +19,7 @@ The GUI is served at `http://127.0.0.1:4173`. It is intentionally a local browse
 
 - Scanning never follows symbolic links and ignores known application and protected paths.
 - Git tracked paths are promoted to `protected` and cannot be selected.
+- A project-local `.shedignore` can hide generated paths from discovery.
 - `clean` is a dry run unless `--quarantine --yes` is supplied.
 - Quarantine only moves safe-tier artifacts discovered under the current user's home directory. It records a manifest and can be reversed with `restore --last`.
 - Permanent deletion and `quarantine purge` are disabled in this build.
@@ -41,3 +42,5 @@ shed doctor
 shed gui [--port 4173] [--no-open]
 shed rules list|show <rule-id> [--json]
 ```
+
+`--quarantine --yes` performs a second filesystem check and skips symlinks, protected paths, and directories currently reported by `lsof` as in use. The GUI's cleanup action is preview-only by design.
