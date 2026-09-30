@@ -22,7 +22,7 @@ The GUI is served at `http://127.0.0.1:4173`. It is intentionally a local browse
 - A project-local `.shedignore` can hide generated paths from discovery.
 - `clean` is a dry run unless `--quarantine --yes` is supplied.
 - Quarantine only moves safe-tier artifacts discovered under the current user's home directory. It records a manifest and can be reversed with `restore --last`.
-- Permanent deletion and `quarantine purge` are disabled in this build.
+- Permanent deletion of scan targets is disabled. `quarantine purge --yes` can remove only items already inside Shed's own quarantine directory.
 
 The current implementation is dependency-free Node.js 22 code. The core boundaries (`scan`, `report`, `explain`, `plan`, `clean`, restore, and GUI API) are kept separate so a future Wails shell can bind to the same core without adding cleanup logic to the UI.
 
@@ -36,7 +36,7 @@ shed plan [filters] [--json]
 shed clean [filters] [--dry-run] [--quarantine --yes]
 shed restore <batch|--last>
 shed quarantine list
-shed quarantine purge              # intentionally blocked
+shed quarantine purge [--yes]      # removes only Shed quarantine data
 shed history
 shed doctor
 shed gui [--port 4173] [--no-open]

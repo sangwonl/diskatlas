@@ -179,8 +179,16 @@ async function run() {
   }
   if (command === 'quarantine') {
     const subcommand = args[1] || 'list';
-    if (subcommand === 'purge') { console.error('Permanent purge is disabled by design. Remove quarantine data manually only after reviewing it.'); process.exitCode = 2; return; }
     const root = path.join(stateDir, 'quarantine');
+    if (subcommand === 'purge') {
+      if (!flag('--yes')) { console.error('Purge removes only Shed quarantine data. Re-run with `quarantine purge --yes` after reviewing the list.'); process.exitCode = 2; return; }
+      try {
+        const batches = (await fs.readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory());
+        for (const batch of batches) await fs.rm(path.join(root, batch.name), { recursive: true, force: true });
+        console.log(`Purged ${batches.length} quarantine batch(es).`);
+      } catch (error) { console.error(`Unable to purge quarantine: ${error.message}`); process.exitCode = 1; }
+      return;
+    }
     try {
       const batches = (await fs.readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory());
       if (!batches.length) console.log('Quarantine is empty.');
