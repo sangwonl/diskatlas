@@ -17,7 +17,7 @@ app.innerHTML = `
   <main>
     <section class="hero"><div><h2>Disk health</h2><p>Find rebuildable data, large personal files, and stale items before deciding what to remove.</p></div><div class="scanbar"><input id="root" value="~" aria-label="Scan folder" /><button id="browse" class="secondary">Choose folder</button><button id="scan">Scan</button></div></section>
     <div id="progress" class="progress">Ready</div>
-    <section id="summary" class="cards"><div class="card"><small>Status</small><strong>Ready</strong><small>No files changed</small></div></section>
+    <section id="summary" class="cards hidden"></section>
     <section class="panel"><div class="panel-head"><div><h3>Reclaim candidates</h3><small>Items are grouped by cleanup reason so each action keeps its context.</small></div><div class="filters"><select id="tier"><option value="">All tiers</option><option>safe</option><option>caution</option><option>review</option><option>protected</option></select><input id="filter" placeholder="Filter path or rule" /></div></div><div class="actionbar"><label><input type="checkbox" id="risk" /> Allow caution and review items</label><div class="action-right"><strong id="selection">0 selected</strong><select id="mode"><option value="delete">Delete now</option><option value="quarantine">Move to quarantine</option></select><button id="preview" disabled>Review cleanup</button></div></div><div id="table" class="empty">Choose a folder and start a scan.</div></section>
     <section id="review" class="panel review-panel hidden"></section>
     <p class="note">Protected paths can never be selected. Every cleanup is revalidated immediately before execution. Personal files are review candidates, never automatic safe recommendations.</p>
@@ -33,6 +33,7 @@ function draw(result) {
   groups = result.groups || [];
   selected.clear();
   const summary = result.summary || {};
+  document.querySelector('#summary').classList.remove('hidden');
   document.querySelector('#summary').innerHTML = ['safe', 'caution', 'review', 'protected'].map((tier) => `<div class="card"><small>${tier[0].toUpperCase() + tier.slice(1)}</small><strong class="${tier}">${formatBytes(summary[tier]?.bytes)}</strong><small>${summary[tier]?.count || 0} items</small></div>`).join('');
   document.querySelector('#progress').textContent = `Finished in ${result.durationMs || 0} ms · ${items.length} candidates`;
   document.querySelector('#review').classList.add('hidden');
