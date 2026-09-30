@@ -13,10 +13,10 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => 
 const tierIcon = { safe: '🟢', caution: '🟡', review: '🟠', protected: '🔴' };
 
 app.innerHTML = `
-  <header><div class="brand"><div class="mark">S</div><div><h1>Shed</h1><p>Reclaim gigabytes. Lose nothing you can't rebuild.</p></div></div><span class="local">Native Wails · local only</span></header>
+  <header><div class="brand"><div class="mark">S</div><h1>Shed</h1></div></header>
   <main>
-    <section class="hero"><div><h2>Disk health</h2><p>Find rebuildable data, large personal files, and stale items before deciding what to remove.</p></div><div class="scanbar"><input id="root" value="~" aria-label="Scan folder" /><button id="browse" class="secondary">Choose folder</button><button id="scan">Scan</button></div></section>
-    <div id="progress" class="progress">Ready</div>
+    <section class="hero"><div class="scanbar"><input id="root" value="~" aria-label="Scan folder" /><button id="browse" class="secondary">Choose folder</button><button id="scan">Scan</button></div></section>
+    <div id="progress" class="progress hidden"></div>
     <section id="summary" class="cards hidden"></section>
     <section class="panel"><div class="panel-head"><div><h3>Reclaim candidates</h3><small>Items are grouped by cleanup reason so each action keeps its context.</small></div><div class="filters"><select id="tier"><option value="">All tiers</option><option>safe</option><option>caution</option><option>review</option><option>protected</option></select><input id="filter" placeholder="Filter path or rule" /></div></div><div class="actionbar"><label><input type="checkbox" id="risk" /> Allow caution and review items</label><div class="action-right"><strong id="selection">0 selected</strong><select id="mode"><option value="delete">Delete now</option><option value="quarantine">Move to quarantine</option></select><button id="preview" disabled>Review cleanup</button></div></div><div id="table" class="empty">Choose a folder and start a scan.</div></section>
     <section id="review" class="panel review-panel hidden"></section>
@@ -26,8 +26,36 @@ app.innerHTML = `
 let items = [];
 let groups = [];
 let selected = new Set();
+let streamRenderTimer = null;
 
 function selectedItems() { return items.filter((item) => selected.has(item.id)); }
+function groupRank(tier) { return ({ safe: 0, caution: 1, review: 2, protected: 3 }[tier] ?? 4); }
+function groupDescription(item) {
+  if (item.tier === 'safe') return 'Rebuildable items that can be cleaned together with low risk.';
+  if (item.tier === 'caution') return 'Rebuildable, but may require significant download or setup time.';
+  return 'User-managed content requiring an item-by-item review.';
+}
+function buildGroups(source) {
+  const byKey = new Map();
+  source.filter((item) => item.tier !== 'protected').forEach((item) => {
+    const key = `${item.tier}:${item.ruleId}`;
+    let group = byKey.get(key);
+    if (!group) {
+      group = { id: key, title: item.name, description: groupDescription(item), tier: item.tier, category: item.category, bytes: 0, count: 0, itemIds: [] };
+      byKey.set(key, group);
+    }
+    group.bytes += item.bytes; group.count += 1; group.itemIds.push(item.id);
+  });
+  return [...byKey.values()].sort((a, b) => groupRank(a.tier) - groupRank(b.tier) || b.bytes - a.bytes);
+}
+function scheduleStreamingRender() {
+  if (streamRenderTimer) return;
+  streamRenderTimer = setTimeout(() => {
+    streamRenderTimer = null;
+    groups = buildGroups(items);
+    renderTable(); updateSelection();
+  }, 100);
+}
 function draw(result) {
   items = result.items || [];
   groups = result.groups || [];
@@ -93,6 +121,12 @@ async function chooseDirectory() {
 }
 async function runScan() {
   const button = document.querySelector('#scan'); button.disabled = true; button.textContent = 'Scanning…';
+  items = []; groups = []; selected.clear();
+  document.querySelector('#progress').classList.remove('hidden');
+  document.querySelector('#summary').classList.add('hidden');
+  document.querySelector('#review').classList.add('hidden');
+  document.querySelector('#table').innerHTML = '<div class="empty">Scanning… candidates will appear here as they are found.</div>';
+  document.querySelector('#progress').textContent = 'Preparing scan…';
   try { draw(await Scan(document.querySelector('#root').value || '~')); }
   catch (error) { document.querySelector('#table').textContent = error?.message || String(error); }
   finally { button.disabled = false; button.textContent = 'Scan again'; }
@@ -111,6 +145,12 @@ document.querySelector('#preview').onclick = async () => {
   catch (error) { alert(error?.message || String(error)); }
 };
 EventsOn('scan:progress', (progress) => {
+  document.querySelector('#progress').classList.remove('hidden');
   const suffix = progress.path ? ` · ${progress.path}` : '';
-  document.querySelector('#progress').textContent = `${progress.phase}: ${progress.scanned} · ${progress.candidates} candidates${suffix}`;
+  const found = progress.found || 0;
+  document.querySelector('#progress').textContent = `${progress.phase}: ${found} found · ${progress.scanned}/${progress.candidates || '?'} checked${suffix}`;
+  if (progress.item && !items.some((item) => item.id === progress.item.id)) {
+    items.push(progress.item);
+    scheduleStreamingRender();
+  }
 });

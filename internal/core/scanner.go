@@ -78,7 +78,9 @@ type Progress struct {
 	Phase      string `json:"phase"`
 	Scanned    int64  `json:"scanned"`
 	Candidates int64  `json:"candidates"`
+	Found      int64  `json:"found"`
 	Path       string `json:"path,omitempty"`
+	Item       *Item  `json:"item,omitempty"`
 }
 
 type Result struct {
@@ -209,18 +211,22 @@ func ScanWithProgress(root string, onProgress func(Progress)) (*Result, error) {
 	items := make(chan Item)
 	var workers sync.WaitGroup
 	var measured atomic.Int64
+	var found atomic.Int64
 	seen := &sync.Map{}
 	for range workerCount {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
 			for candidate := range jobs {
+				var foundItem *Item
 				if item, ok := inspect(candidate.rule, candidate.target, candidate.project, seen); ok {
 					items <- item
+					foundItem = &item
+					found.Add(1)
 				}
 				current := measured.Add(1)
 				if onProgress != nil {
-					onProgress(Progress{Phase: "measure", Scanned: current, Candidates: int64(len(candidates)), Path: candidate.target})
+					onProgress(Progress{Phase: "measure", Scanned: current, Candidates: int64(len(candidates)), Found: found.Load(), Path: candidate.target, Item: foundItem})
 				}
 			}
 		}()
@@ -246,7 +252,7 @@ func ScanWithProgress(root string, onProgress func(Progress)) (*Result, error) {
 	result.Groups = makeGroups(result.Items)
 	result.DurationMS = time.Since(started).Milliseconds()
 	if onProgress != nil {
-		onProgress(Progress{Phase: "done", Scanned: int64(len(candidates)), Candidates: int64(len(result.Items))})
+		onProgress(Progress{Phase: "done", Scanned: int64(len(candidates)), Candidates: int64(len(candidates)), Found: int64(len(result.Items))})
 	}
 	return result, nil
 }
