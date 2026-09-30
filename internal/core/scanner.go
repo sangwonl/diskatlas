@@ -279,7 +279,7 @@ func discoverProjects(root string, onProgress func(Progress)) ([]scanCandidate, 
 				info, infoErr := entry.Info()
 				if infoErr == nil && info.Mode().IsRegular() {
 					for _, rule := range general {
-						if info.Size() < rule.MinBytes {
+						if allocatedSize(info) < rule.MinBytes {
 							continue
 						}
 						if rule.OlderThanDays > 0 && now.Sub(info.ModTime()) < time.Duration(rule.OlderThanDays)*24*time.Hour {
@@ -409,7 +409,7 @@ func measure(target string, seen *sync.Map) (int64, int) {
 				return 0, 0
 			}
 		}
-		return info.Size(), 1
+		return allocatedSize(info), 1
 	}
 	var bytes int64
 	files := 0
@@ -424,6 +424,22 @@ func measure(target string, seen *sync.Map) (int64, int) {
 		files += f
 	}
 	return bytes, files
+}
+
+// allocatedSize reports the space occupied on disk instead of the logical file
+// length. This matters for sparse VM and disk image files on macOS.
+func allocatedSize(info os.FileInfo) int64 {
+	value := reflect.Indirect(reflect.ValueOf(info.Sys()))
+	if value.IsValid() && value.Kind() == reflect.Struct {
+		if blocks := value.FieldByName("Blocks"); blocks.IsValid() {
+			if raw := reflectNumber(blocks); raw != "" {
+				if count, err := strconv.ParseInt(raw, 10, 64); err == nil && count >= 0 {
+					return count * 512
+				}
+			}
+		}
+	}
+	return info.Size()
 }
 
 func fileIdentity(info os.FileInfo) string {
