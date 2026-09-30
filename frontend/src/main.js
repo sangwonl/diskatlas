@@ -15,7 +15,7 @@ const tierName = {safe:'다시 생성 가능', caution:'복구 비용 확인', r
 let items = new Map(), expanded = new Set(), busy = false, scanValid = false, timer, storage;
 let pending = null;
 $('#app').innerHTML = `
- <header><strong>Shed</strong><button id="refresh">다시 분석</button></header>
+ <header><strong>Shed</strong><button id="refresh">분석 시작</button></header>
  <main>
   <section class="storage" aria-label="디스크 사용량">
    <div class="storage-heading"><h1>저장 공간</h1><span id="capacity">용량 확인 중…</span></div>
@@ -82,7 +82,7 @@ function render() {
     <button data-item="${escape(item.id)}" ${!scanValid || busy || item.tier==='protected'?'disabled':''}>정리…</button></div>`).join('')}
    ${rows.length>3?`<button class="more" data-expand="${id}">${expanded.has(id)?'접기':`나머지 ${rows.length-3}개 보기`}</button>`:''}
   </section>`;
- }).join('') : `<p class="empty">${busy?'정리할 항목을 찾고 있습니다.':'정리 후보가 없습니다.'}</p>`;
+ }).join('') : `<p class="empty">${busy?'정리할 항목을 찾고 있습니다.':scanValid?'정리 후보가 없습니다.':'분석을 시작하면 정리 후보가 표시됩니다.'}</p>`;
  document.querySelectorAll('[data-expand]').forEach(button=>button.onclick=()=>{const id=button.dataset.expand;expanded.has(id)?expanded.delete(id):expanded.add(id);render();});
  document.querySelectorAll('[data-item]').forEach(button=>button.onclick=()=>review([items.get(button.dataset.item)]));
  document.querySelectorAll('[data-group]').forEach(button=>button.onclick=()=>review(groups.find(g=>g.id===button.dataset.group).rows.filter(i=>i.tier!=='protected')));
@@ -150,4 +150,4 @@ EventsOn('scan:progress',p=>{
 EventsOn('storage:progress',value=>{if(busy)drawStorage(value);});
 $('#review').addEventListener('cancel',event=>{if($('#cancel')?.disabled)event.preventDefault();});
 $('#refresh').onclick=refresh;
-StorageInfo().then(value=>{drawStorage(value);return refresh();}).catch(err=>{$('#error').textContent=String(err);});
+StorageInfo().then(drawStorage).catch(err=>{$('#error').textContent=String(err);});
