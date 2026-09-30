@@ -9,3 +9,5 @@ export function PreviewCleanup(arg1:core.CleanupRequest):Promise<core.CleanupPre
 export function Rules():Promise<Array<core.Rule>>;
 
 export function Scan(arg1:string):Promise<core.Result>;
+
+export function SelectDirectory():Promise<string>;

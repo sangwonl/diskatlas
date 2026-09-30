@@ -47,6 +47,19 @@ func (a *App) Rules() []core.Rule {
 	return core.Rules()
 }
 
+func (a *App) SelectDirectory() (string, error) {
+	if a.ctx == nil {
+		return "", errors.New("native window is not ready")
+	}
+	return wailsruntime.OpenDirectoryDialog(a.ctx, wailsruntime.OpenDialogOptions{
+		Title:                      "Choose a folder to scan",
+		ShowHiddenFiles:            true,
+		CanCreateDirectories:       false,
+		ResolvesAliases:            true,
+		TreatPackagesAsDirectories: true,
+	})
+}
+
 func (a *App) PreviewCleanup(request core.CleanupRequest) (core.CleanupPreview, error) {
 	a.mu.RLock()
 	scan := a.lastScan

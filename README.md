@@ -21,12 +21,13 @@ gvm use go1.25.0
 wails dev
 ```
 
-The Wails app uses a bounded Go worker pool to discover and measure candidates concurrently. The native UI can permanently delete selected items or move them into Shed's quarantine.
+The Wails app uses a bounded Go worker pool to discover and measure candidates concurrently. Use `Choose folder` to open the native folder picker, or type a path directly. The native UI can permanently delete selected items or move them into Shed's quarantine.
 
 ## Safety model
 
 - Scanning never follows symbolic links and ignores known application and protected paths.
 - System, credential, and application paths are `protected` and can never be selected. Git-tracked data is `review` and requires explicit acknowledgement.
+- In addition to developer caches, a scan shows regular files larger than 500 MB and files larger than 100 MB that have not changed for 180 days. These are `review` candidates because size and age alone do not prove that a personal file is disposable.
 - A project-local `.shedignore` can hide generated paths from discovery.
 - `clean` is a dry run unless `--quarantine --yes` is supplied.
 - Quarantine only moves safe-tier artifacts discovered under the current user's home directory. It records a manifest and can be reversed with `restore --last`.

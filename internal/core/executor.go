@@ -219,6 +219,13 @@ func matchesRule(item Item) bool {
 			}
 			return false
 		}
+		if rule.Kind == "general" {
+			info, err := os.Lstat(item.Path)
+			if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() < rule.MinBytes {
+				return false
+			}
+			return rule.OlderThanDays == 0 || time.Since(info.ModTime()) >= time.Duration(rule.OlderThanDays)*24*time.Hour
+		}
 		if item.ProjectPath == "" || !hasAny(item.ProjectPath, rule.Markers) {
 			return false
 		}

@@ -250,6 +250,8 @@ export namespace core {
 	    rebuild: string;
 	    native?: string;
 	    cost: string;
+	    minBytes?: number;
+	    olderThanDays?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Rule(source);
@@ -267,6 +269,8 @@ export namespace core {
 	        this.rebuild = source["rebuild"];
 	        this.native = source["native"];
 	        this.cost = source["cost"];
+	        this.minBytes = source["minBytes"];
+	        this.olderThanDays = source["olderThanDays"];
 	    }
 	}
 

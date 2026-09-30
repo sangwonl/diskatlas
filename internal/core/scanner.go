@@ -25,16 +25,18 @@ const (
 )
 
 type Rule struct {
-	ID       string   `json:"id"`
-	Name     string   `json:"name"`
-	Kind     string   `json:"kind"`
-	Markers  []string `json:"markers,omitempty"`
-	Targets  []string `json:"targets,omitempty"`
-	Tier     Tier     `json:"tier"`
-	Category string   `json:"category"`
-	Rebuild  string   `json:"rebuild"`
-	Native   string   `json:"native,omitempty"`
-	Cost     string   `json:"cost"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Kind          string   `json:"kind"`
+	Markers       []string `json:"markers,omitempty"`
+	Targets       []string `json:"targets,omitempty"`
+	Tier          Tier     `json:"tier"`
+	Category      string   `json:"category"`
+	Rebuild       string   `json:"rebuild"`
+	Native        string   `json:"native,omitempty"`
+	Cost          string   `json:"cost"`
+	MinBytes      int64    `json:"minBytes,omitempty"`
+	OlderThanDays int      `json:"olderThanDays,omitempty"`
 }
 
 type Item struct {
@@ -100,7 +102,15 @@ var projectRules = []Rule{
 func Rules() []Rule {
 	result := append([]Rule{}, projectRules...)
 	result = append(result, globalRules()...)
+	result = append(result, generalRules()...)
 	return result
+}
+
+func generalRules() []Rule {
+	return []Rule{
+		{ID: "general.large-files", Name: "Large files", Kind: "general", Tier: Review, Category: "Personal files", Rebuild: "Keep, archive, or move to external storage", Cost: "high", MinBytes: 500 * 1024 * 1024},
+		{ID: "general.old-files", Name: "Large files not opened recently", Kind: "general", Tier: Review, Category: "Personal files", Rebuild: "Review before deleting or archive externally", Cost: "high", MinBytes: 100 * 1024 * 1024, OlderThanDays: 180},
+	}
 }
 
 func globalRules() []Rule {
@@ -244,19 +254,40 @@ func ScanWithProgress(root string, onProgress func(Progress)) (*Result, error) {
 func discoverProjects(root string, onProgress func(Progress)) ([]scanCandidate, error) {
 	candidates := []scanCandidate{}
 	seenCandidates := map[string]bool{}
+	general := generalRules()
+	now := time.Now()
 	var scanned atomic.Int64
 	err := filepath.WalkDir(root, func(dir string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
 		}
 		if entry.IsDir() && entry.Name() != filepath.Base(root) {
-			for _, skip := range []string{".git", "node_modules", "target", ".next", ".venv", "venv", "Library", "Applications"} {
+			for _, skip := range []string{".git", "node_modules", "target", ".next", ".nuxt", ".turbo", ".parcel-cache", ".venv", "venv", ".npm", ".cache", ".cargo", ".ollama", "Library", "Applications"} {
 				if entry.Name() == skip {
 					return filepath.SkipDir
 				}
 			}
 		}
 		if !entry.IsDir() {
+			if entry.Type()&os.ModeSymlink == 0 && !strings.HasPrefix(entry.Name(), ".") {
+				info, infoErr := entry.Info()
+				if infoErr == nil && info.Mode().IsRegular() {
+					for _, rule := range general {
+						if info.Size() < rule.MinBytes {
+							continue
+						}
+						if rule.OlderThanDays > 0 && now.Sub(info.ModTime()) < time.Duration(rule.OlderThanDays)*24*time.Hour {
+							continue
+						}
+						key := rule.ID + ":" + dir
+						if !seenCandidates[key] {
+							seenCandidates[key] = true
+							candidates = append(candidates, scanCandidate{rule: rule, target: dir})
+						}
+						break
+					}
+				}
+			}
 			return nil
 		}
 		count := scanned.Add(1)
@@ -330,13 +361,35 @@ func inspect(rule Rule, target, project string, seen *sync.Map) (Item, bool) {
 		}
 	}
 	explanation := fmt.Sprintf("%s can be recreated with %s.", rule.Name, rule.Rebuild)
+	if rule.Kind == "general" {
+		if rule.ID == "general.large-files" {
+			signals = append(signals, fmt.Sprintf("Regular file larger than %s", formatBytes(rule.MinBytes)))
+			explanation = "This is a large personal file, not a rebuildable cache. Review its contents before deleting or archive it elsewhere."
+		} else {
+			signals = append(signals, fmt.Sprintf("No modification in the last %d days", rule.OlderThanDays))
+			explanation = "This large personal file has not changed recently. Confirm that it is still needed before deleting or archiving it."
+		}
+	}
 	if tier == Review {
-		explanation = fmt.Sprintf("%s contains user-managed data and requires manual review.", rule.Name)
+		if rule.Kind != "general" {
+			explanation = fmt.Sprintf("%s contains user-managed data and requires manual review.", rule.Name)
+		}
 	}
 	if tier == Protected {
 		explanation = "Protected by Shed safety rules and cannot be selected."
 	}
 	return Item{ID: rule.ID + ":" + target, RuleID: rule.ID, Name: rule.Name, Path: target, ProjectPath: project, Category: rule.Category, Tier: tier, Bytes: bytes, Files: files, ModifiedAt: info.ModTime().UTC().Format(time.RFC3339), Signals: signals, Explanation: explanation, Rebuild: rule.Rebuild, Native: rule.Native, Cost: rule.Cost, Clean: map[bool]string{true: "blocked", false: "quarantine"}[tier == Protected]}, true
+}
+
+func formatBytes(bytes int64) string {
+	value := float64(bytes)
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	index := 0
+	for value >= 1024 && index < len(units)-1 {
+		value /= 1024
+		index++
+	}
+	return fmt.Sprintf("%.1f %s", value, units[index])
 }
 
 func measure(target string, seen *sync.Map) (int64, int) {
@@ -481,10 +534,11 @@ func isProtected(target string) bool {
 	if clean == string(filepath.Separator) || strings.Contains(slashed, "/.git/") {
 		return true
 	}
-	for _, marker := range []string{"/.ssh/", "/.gnupg/", "/Documents/", "/Desktop/", "/Pictures/", "/System/", "/Library/Keychains/"} {
+	for _, marker := range []string{"/.ssh/", "/.gnupg/", "/System/", "/Library/Keychains/"} {
 		if strings.Contains(slashed, marker) {
 			return true
 		}
 	}
-	return strings.HasSuffix(strings.TrimSuffix(slashed, "/"), ".app")
+	trimmed := strings.TrimSuffix(slashed, "/")
+	return strings.HasSuffix(trimmed, ".app") || strings.Contains(slashed, ".app/")
 }

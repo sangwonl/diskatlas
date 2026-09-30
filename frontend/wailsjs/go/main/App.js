@@ -17,3 +17,7 @@ export function Rules() {
 export function Scan(arg1) {
   return window['go']['main']['App']['Scan'](arg1);
 }
+
+export function SelectDirectory() {
+  return window['go']['main']['App']['SelectDirectory']();
+}
