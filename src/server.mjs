@@ -32,7 +32,7 @@ export function startServer({ port = 4173, open = true } = {}) {
       if (url.pathname === '/api/clean' && req.method === 'POST') {
         const body = await readBody(req);
         const selected = new Set(Array.isArray(body.ids) ? body.ids : []);
-        const items = (current?.items || []).filter((item) => selected.has(item.id) && item.tier === 'safe' && item.clean !== 'blocked');
+        const items = (current?.items || []).filter((item) => selected.has(item.id) && (item.tier === 'safe' || (body.unlockReview === true && item.tier === 'review')) && item.clean !== 'blocked');
         if (body.confirm !== true) return sendJson(res, { dryRun: true, items, totalBytes: items.reduce((sum, item) => sum + item.bytes, 0) });
         return sendJson(res, { dryRun: true, blocked: true, message: 'GUI mutations are disabled in this build. Use the CLI quarantine command with explicit --yes.', items });
       }

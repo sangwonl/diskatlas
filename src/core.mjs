@@ -123,7 +123,10 @@ function classify(rule, targetPath, projectPath, hasLockfile = false) {
   if (isProtected(targetPath)) { tier = 'protected'; signals.push('Protected user or application path'); }
   if (projectPath) {
     const git = gitSignal(projectPath, targetPath);
-    if (git.tracked) { tier = 'protected'; signals.push('Git tracks files in this path'); }
+    if (git.tracked) {
+      signals.push('Git tracks files in this path; manual review is required');
+      if (tier !== 'protected') tier = 'review';
+    }
     else if (git.ignored) signals.push('Git ignores this path');
     if (rule.lockfiles && !hasLockfile) { tier = 'caution'; signals.push('No lockfile was found'); }
     else if (hasLockfile) signals.push('A lockfile can reproduce the exact dependency versions');
@@ -137,6 +140,8 @@ function itemFrom(rule, targetPath, projectPath, size, hasLockfile = false) {
   try { modifiedAt = new Date(fsSync.statSync(targetPath).mtimeMs).toISOString(); } catch { modifiedAt = null; }
   const why = classification.tier === 'protected'
     ? 'Protected by Shed safety rules and cannot be selected.'
+    : classification.tier === 'review'
+      ? `${rule.name} includes user-managed or Git-tracked data. Review the contents before moving it to quarantine.`
     : `${rule.name} can be recreated with ${rule.rebuild}. ${classification.signals.join('; ') || 'Matched a known developer artifact rule.'}`;
   return {
     id: `${rule.id}:${targetPath}`,

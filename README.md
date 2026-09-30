@@ -13,18 +13,26 @@ node bin/shed.mjs clean --dry-run
 npm run gui
 ```
 
-The GUI is served at `http://127.0.0.1:4173`. It is intentionally a local browser UI so it can run without a framework, native modules, or network access.
+The browser GUI is served at `http://127.0.0.1:4173`. The native Wails GUI is launched from the repository root with:
+
+```sh
+loadgvm
+gvm use go1.25.0
+wails dev
+```
+
+The Wails shell calls the read-only Go scanner through generated bindings. It does not expose deletion or quarantine methods to the native UI.
 
 ## Safety model
 
 - Scanning never follows symbolic links and ignores known application and protected paths.
-- Git tracked paths are promoted to `protected` and cannot be selected.
+- System, credential, and application paths are `protected`; Git-tracked user data is `review` and requires explicit acknowledgement before a recoverable move.
 - A project-local `.shedignore` can hide generated paths from discovery.
 - `clean` is a dry run unless `--quarantine --yes` is supplied.
 - Quarantine only moves safe-tier artifacts discovered under the current user's home directory. It records a manifest and can be reversed with `restore --last`.
 - Permanent deletion of scan targets is disabled. `quarantine purge --yes` can remove only items already inside Shed's own quarantine directory.
 
-The current implementation is dependency-free Node.js 22 code. The core boundaries (`scan`, `report`, `explain`, `plan`, `clean`, restore, and GUI API) are kept separate so a future Wails shell can bind to the same core without adding cleanup logic to the UI.
+The CLI remains dependency-free Node.js 22 code for now. The native shell is Go 1.25 + Wails v2 and has its own read-only Go scanner under `internal/core`; this lets the Wails app run without starting the browser server.
 
 ## Commands
 

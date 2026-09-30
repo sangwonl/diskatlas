@@ -10,6 +10,8 @@
   "scripts": {
     "scan": "node ./bin/shed.mjs scan",
     "gui": "node ./bin/shed.mjs gui",
-    "start": "node ./bin/shed.mjs gui"
+    "start": "node ./bin/shed.mjs gui",
+    "wails:dev": "wails dev",
+    "wails:build": "wails build"
   }
 }

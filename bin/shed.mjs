@@ -52,6 +52,17 @@ function filterItems(items) {
     return true;
   });
 }
+function cleanupCandidates(items) {
+  const requestedTier = value('--tier');
+  if (requestedTier === 'review' && !flag('--unlock')) {
+    console.error('Review items require an explicit --unlock acknowledgement. They may contain user-managed files.');
+    process.exitCode = 2;
+    return [];
+  }
+  if (requestedTier === 'protected') return [];
+  const filtered = filterItems(items);
+  return filtered.filter((item) => item.tier === 'safe' || (requestedTier === 'review' && flag('--unlock') && item.tier === 'review'));
+}
 
 async function loadScan() {
   try { return JSON.parse(await fs.readFile(lastScanPath, 'utf8')); }
@@ -121,7 +132,7 @@ async function run() {
     return;
   }
   if (command === 'clean') {
-    const candidates = filterItems(result.items).filter((item) => item.tier === 'safe' && item.clean !== 'blocked');
+    const candidates = cleanupCandidates(result.items).filter((item) => item.clean !== 'blocked');
     if (flag('--json')) return printJson({ dryRun: true, candidates });
     const total = candidates.reduce((sum, item) => sum + item.bytes, 0);
     if (flag('--quarantine') && flag('--yes')) {
@@ -151,7 +162,8 @@ async function run() {
       console.log(`Quarantined ${manifest.filter((item) => !item.error).length} item(s). They remain restorable in ${quarantineRoot}.`);
       return;
     }
-    console.log(`Dry run: ${candidates.length} safe item(s), ${formatBytes(total)} potential reclaim.`);
+    const reviewCount = candidates.filter((item) => item.tier === 'review').length;
+    console.log(`Dry run: ${candidates.length} item(s), ${formatBytes(total)} potential reclaim${reviewCount ? ` (${reviewCount} review item(s) explicitly unlocked)` : ''}.`);
     console.log('No files were changed. Use --quarantine --yes to move HOME artifacts into recoverable quarantine.');
     if (flag('--permanent')) { console.error('Permanent deletion is disabled by design.'); process.exitCode = 2; }
     return;
