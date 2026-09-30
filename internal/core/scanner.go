@@ -3,10 +3,15 @@ package core
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -56,11 +61,31 @@ type TierSummary struct {
 	Count int   `json:"count"`
 }
 
+type Group struct {
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Tier        Tier     `json:"tier"`
+	Category    string   `json:"category"`
+	Bytes       int64    `json:"bytes"`
+	Count       int      `json:"count"`
+	ItemIDs     []string `json:"itemIds"`
+}
+
+type Progress struct {
+	Phase      string `json:"phase"`
+	Scanned    int64  `json:"scanned"`
+	Candidates int64  `json:"candidates"`
+	Path       string `json:"path,omitempty"`
+}
+
 type Result struct {
 	GeneratedAt string                 `json:"generatedAt"`
 	Roots       []string               `json:"roots"`
 	Items       []Item                 `json:"items"`
 	Summary     map[string]TierSummary `json:"summary"`
+	Groups      []Group                `json:"groups"`
+	DurationMS  int64                  `json:"durationMs"`
 }
 
 var projectRules = []Rule{
@@ -118,7 +143,18 @@ func globalRules() []Rule {
 	return rules
 }
 
+type scanCandidate struct {
+	rule    Rule
+	target  string
+	project string
+}
+
 func Scan(root string) (*Result, error) {
+	return ScanWithProgress(root, nil)
+}
+
+func ScanWithProgress(root string, onProgress func(Progress)) (*Result, error) {
+	started := time.Now()
 	if root == "" || root == "~" {
 		root, _ = os.UserHomeDir()
 	}
@@ -138,18 +174,57 @@ func Scan(root string) (*Result, error) {
 		return nil, fmt.Errorf("scan root is not a directory: %s", root)
 	}
 	result := &Result{GeneratedAt: time.Now().UTC().Format(time.RFC3339), Roots: []string{root}, Items: []Item{}, Summary: map[string]TierSummary{string(Safe): {}, string(Caution): {}, string(Review): {}, string(Protected): {}}}
+	candidates := make([]scanCandidate, 0, 128)
 	for _, rule := range globalRules() {
 		for _, target := range rule.Targets {
 			if target == "" || !isWithin(root, target) {
 				continue
 			}
-			if item, ok := inspect(rule, target, ""); ok {
-				result.Items = append(result.Items, item)
-			}
+			candidates = append(candidates, scanCandidate{rule: rule, target: target})
 		}
 	}
-	if err := walkProjects(root, result); err != nil {
+	projectCandidates, err := discoverProjects(root, onProgress)
+	if err != nil {
 		return nil, err
+	}
+	candidates = append(candidates, projectCandidates...)
+	workerCount := runtime.NumCPU() * 2
+	if workerCount < 4 {
+		workerCount = 4
+	}
+	if workerCount > 16 {
+		workerCount = 16
+	}
+	jobs := make(chan scanCandidate)
+	items := make(chan Item)
+	var workers sync.WaitGroup
+	var measured atomic.Int64
+	seen := &sync.Map{}
+	for range workerCount {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for candidate := range jobs {
+				if item, ok := inspect(candidate.rule, candidate.target, candidate.project, seen); ok {
+					items <- item
+				}
+				current := measured.Add(1)
+				if onProgress != nil {
+					onProgress(Progress{Phase: "measure", Scanned: current, Candidates: int64(len(candidates)), Path: candidate.target})
+				}
+			}
+		}()
+	}
+	go func() {
+		for _, candidate := range candidates {
+			jobs <- candidate
+		}
+		close(jobs)
+		workers.Wait()
+		close(items)
+	}()
+	for item := range items {
+		result.Items = append(result.Items, item)
 	}
 	sort.Slice(result.Items, func(i, j int) bool { return result.Items[i].Bytes > result.Items[j].Bytes })
 	for _, item := range result.Items {
@@ -158,11 +233,19 @@ func Scan(root string) (*Result, error) {
 		s.Count++
 		result.Summary[string(item.Tier)] = s
 	}
+	result.Groups = makeGroups(result.Items)
+	result.DurationMS = time.Since(started).Milliseconds()
+	if onProgress != nil {
+		onProgress(Progress{Phase: "done", Scanned: int64(len(candidates)), Candidates: int64(len(result.Items))})
+	}
 	return result, nil
 }
 
-func walkProjects(root string, result *Result) error {
-	return filepath.WalkDir(root, func(dir string, entry os.DirEntry, walkErr error) error {
+func discoverProjects(root string, onProgress func(Progress)) ([]scanCandidate, error) {
+	candidates := []scanCandidate{}
+	seenCandidates := map[string]bool{}
+	var scanned atomic.Int64
+	err := filepath.WalkDir(root, func(dir string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
 		}
@@ -175,6 +258,10 @@ func walkProjects(root string, result *Result) error {
 		}
 		if !entry.IsDir() {
 			return nil
+		}
+		count := scanned.Add(1)
+		if onProgress != nil && (count == 1 || count%200 == 0) {
+			onProgress(Progress{Phase: "discover", Scanned: count, Candidates: int64(len(candidates)), Path: dir})
 		}
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -197,21 +284,24 @@ func walkProjects(root string, result *Result) error {
 			}
 			for _, target := range rule.Targets {
 				targetPath := filepath.Join(dir, target)
-				if item, ok := inspect(rule, targetPath, dir); ok {
-					result.Items = append(result.Items, item)
+				key := rule.ID + ":" + targetPath
+				if !seenCandidates[key] {
+					seenCandidates[key] = true
+					candidates = append(candidates, scanCandidate{rule: rule, target: targetPath, project: dir})
 				}
 			}
 		}
 		return nil
 	})
+	return candidates, err
 }
 
-func inspect(rule Rule, target, project string) (Item, bool) {
+func inspect(rule Rule, target, project string, seen *sync.Map) (Item, bool) {
 	info, err := os.Lstat(target)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 {
 		return Item{}, false
 	}
-	bytes, files := measure(target, map[string]bool{})
+	bytes, files := measure(target, seen)
 	if bytes == 0 {
 		return Item{}, false
 	}
@@ -229,6 +319,16 @@ func inspect(rule Rule, target, project string) (Item, bool) {
 			signals = append(signals, "A lockfile can reproduce exact dependency versions")
 		}
 	}
+	if project != "" {
+		if gitTracked(project, target) {
+			if tier != Protected {
+				tier = Review
+			}
+			signals = append(signals, "Git tracks files in this path; explicit review is required")
+		} else if gitIgnored(project, target) {
+			signals = append(signals, "Git ignores this generated path")
+		}
+	}
 	explanation := fmt.Sprintf("%s can be recreated with %s.", rule.Name, rule.Rebuild)
 	if tier == Review {
 		explanation = fmt.Sprintf("%s contains user-managed data and requires manual review.", rule.Name)
@@ -239,12 +339,17 @@ func inspect(rule Rule, target, project string) (Item, bool) {
 	return Item{ID: rule.ID + ":" + target, RuleID: rule.ID, Name: rule.Name, Path: target, ProjectPath: project, Category: rule.Category, Tier: tier, Bytes: bytes, Files: files, ModifiedAt: info.ModTime().UTC().Format(time.RFC3339), Signals: signals, Explanation: explanation, Rebuild: rule.Rebuild, Native: rule.Native, Cost: rule.Cost, Clean: map[bool]string{true: "blocked", false: "quarantine"}[tier == Protected]}, true
 }
 
-func measure(target string, seen map[string]bool) (int64, int) {
+func measure(target string, seen *sync.Map) (int64, int) {
 	info, err := os.Lstat(target)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 {
 		return 0, 0
 	}
 	if !info.IsDir() {
+		if key := fileIdentity(info); key != "" {
+			if _, loaded := seen.LoadOrStore(key, true); loaded {
+				return 0, 0
+			}
+		}
 		return info.Size(), 1
 	}
 	var bytes int64
@@ -262,6 +367,102 @@ func measure(target string, seen map[string]bool) (int64, int) {
 	return bytes, files
 }
 
+func fileIdentity(info os.FileInfo) string {
+	value := reflect.Indirect(reflect.ValueOf(info.Sys()))
+	if !value.IsValid() || value.Kind() != reflect.Struct {
+		return ""
+	}
+	dev, ino := value.FieldByName("Dev"), value.FieldByName("Ino")
+	if !dev.IsValid() || !ino.IsValid() {
+		return ""
+	}
+	devNumber, inoNumber := reflectNumber(dev), reflectNumber(ino)
+	if devNumber == "" || inoNumber == "" {
+		return ""
+	}
+	return devNumber + ":" + inoNumber
+}
+
+func reflectNumber(value reflect.Value) string {
+	switch value.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.FormatInt(value.Int(), 10)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return strconv.FormatUint(value.Uint(), 10)
+	default:
+		return ""
+	}
+}
+
+func gitTracked(project, target string) bool {
+	relative, err := filepath.Rel(project, target)
+	if err != nil {
+		return false
+	}
+	output, err := exec.Command("git", "-C", project, "ls-files", "--", relative).Output()
+	return err == nil && strings.TrimSpace(string(output)) != ""
+}
+
+func gitIgnored(project, target string) bool {
+	relative, err := filepath.Rel(project, target)
+	if err != nil {
+		return false
+	}
+	return exec.Command("git", "-C", project, "check-ignore", "-q", "--", relative).Run() == nil
+}
+
+func makeGroups(items []Item) []Group {
+	groups := map[string]*Group{}
+	for _, item := range items {
+		if item.Tier == Protected {
+			continue
+		}
+		key := string(item.Tier) + ":" + item.RuleID
+		group := groups[key]
+		if group == nil {
+			group = &Group{ID: key, Title: item.Name, Description: groupDescription(item), Tier: item.Tier, Category: item.Category, ItemIDs: []string{}}
+			groups[key] = group
+		}
+		group.Bytes += item.Bytes
+		group.Count++
+		group.ItemIDs = append(group.ItemIDs, item.ID)
+	}
+	result := make([]Group, 0, len(groups))
+	for _, group := range groups {
+		result = append(result, *group)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Tier != result[j].Tier {
+			return tierRank(result[i].Tier) < tierRank(result[j].Tier)
+		}
+		return result[i].Bytes > result[j].Bytes
+	})
+	return result
+}
+
+func tierRank(tier Tier) int {
+	switch tier {
+	case Safe:
+		return 0
+	case Caution:
+		return 1
+	case Review:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func groupDescription(item Item) string {
+	if item.Tier == Safe {
+		return "Rebuildable items that can be cleaned together with low risk."
+	}
+	if item.Tier == Caution {
+		return "Rebuildable, but may require significant download or setup time."
+	}
+	return "User-managed content requiring an item-by-item review."
+}
+
 func hasAny(dir string, names []string) bool {
 	for _, name := range names {
 		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
@@ -276,13 +477,14 @@ func isWithin(root, target string) bool {
 }
 func isProtected(target string) bool {
 	clean := filepath.Clean(target)
-	if clean == string(filepath.Separator) || strings.Contains(clean, string(filepath.Separator)+".git"+string(filepath.Separator)) {
+	slashed := "/" + strings.Trim(filepath.ToSlash(clean), "/") + "/"
+	if clean == string(filepath.Separator) || strings.Contains(slashed, "/.git/") {
 		return true
 	}
 	for _, marker := range []string{"/.ssh/", "/.gnupg/", "/Documents/", "/Desktop/", "/Pictures/", "/System/", "/Library/Keychains/"} {
-		if strings.Contains(clean, marker) {
+		if strings.Contains(slashed, marker) {
 			return true
 		}
 	}
-	return strings.HasSuffix(clean, ".app")
+	return strings.HasSuffix(strings.TrimSuffix(slashed, "/"), ".app")
 }

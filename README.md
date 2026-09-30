@@ -1,6 +1,6 @@
 # Shed
 
-Shed is a local, safety-first disk report for developer caches and build outputs. It explains why a path is reclaimable before it appears in a cleanup plan.
+Shed is a local disk cleanup app for developer caches and build outputs. It explains why a path can be removed, groups related candidates, and lets the user reclaim the space from the native app.
 
 ## Run it
 
@@ -21,18 +21,20 @@ gvm use go1.25.0
 wails dev
 ```
 
-The Wails shell calls the read-only Go scanner through generated bindings. It does not expose deletion or quarantine methods to the native UI.
+The Wails app uses a bounded Go worker pool to discover and measure candidates concurrently. The native UI can permanently delete selected items or move them into Shed's quarantine.
 
 ## Safety model
 
 - Scanning never follows symbolic links and ignores known application and protected paths.
-- System, credential, and application paths are `protected`; Git-tracked user data is `review` and requires explicit acknowledgement before a recoverable move.
+- System, credential, and application paths are `protected` and can never be selected. Git-tracked data is `review` and requires explicit acknowledgement.
 - A project-local `.shedignore` can hide generated paths from discovery.
 - `clean` is a dry run unless `--quarantine --yes` is supplied.
 - Quarantine only moves safe-tier artifacts discovered under the current user's home directory. It records a manifest and can be reversed with `restore --last`.
-- Permanent deletion of scan targets is disabled. `quarantine purge --yes` can remove only items already inside Shed's own quarantine directory.
+- The native app accepts cleanup IDs only from the latest in-memory scan. It rechecks the path, rule, protection status, symlinks, Git state, and open file state immediately before cleanup.
+- Permanent deletion requires typing an exact `DELETE N` confirmation. Caution and review items also require explicit risk acknowledgement.
+- Quarantine requires `QUARANTINE N`; moving data on the same disk is recoverable but does not normally free disk space.
 
-The CLI remains dependency-free Node.js 22 code for now. The native shell is Go 1.25 + Wails v2 and has its own read-only Go scanner under `internal/core`; this lets the Wails app run without starting the browser server.
+The CLI remains dependency-free Node.js 22 code for now. The native app is Go 1.25 + Wails v2 and runs without starting the browser server.
 
 ## Commands
 
@@ -51,4 +53,4 @@ shed gui [--port 4173] [--no-open]
 shed rules list|show <rule-id> [--json]
 ```
 
-`--quarantine --yes` performs a second filesystem check and skips symlinks, protected paths, and directories currently reported by `lsof` as in use. The GUI's cleanup action is preview-only by design.
+`--quarantine --yes` performs a second filesystem check and skips symlinks, protected paths, and directories currently reported by `lsof` as in use. The native GUI uses the same checks for quarantine and permanent deletion.
