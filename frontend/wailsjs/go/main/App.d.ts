@@ -6,8 +6,12 @@ export function ExecuteCleanup(arg1:core.CleanupRequest):Promise<core.CleanupRes
 
 export function PreviewCleanup(arg1:core.CleanupRequest):Promise<core.CleanupPreview>;
 
+export function RevealPath(arg1:string):Promise<void>;
+
 export function Rules():Promise<Array<core.Rule>>;
 
 export function Scan(arg1:string):Promise<core.Result>;
 
-export function SelectDirectory():Promise<string>;
+export function ScanStorage():Promise<core.Storage>;
+
+export function StorageInfo():Promise<core.Storage>;

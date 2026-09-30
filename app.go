@@ -3,6 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"sync"
 
 	"safeshed/internal/core"
@@ -47,17 +51,40 @@ func (a *App) Rules() []core.Rule {
 	return core.Rules()
 }
 
-func (a *App) SelectDirectory() (string, error) {
-	if a.ctx == nil {
-		return "", errors.New("native window is not ready")
-	}
-	return wailsruntime.OpenDirectoryDialog(a.ctx, wailsruntime.OpenDialogOptions{
-		Title:                      "Choose a folder to scan",
-		ShowHiddenFiles:            true,
-		CanCreateDirectories:       false,
-		ResolvesAliases:            true,
-		TreatPackagesAsDirectories: true,
+func (a *App) StorageInfo() (core.Storage, error) {
+	return core.StorageInfo()
+}
+
+func (a *App) ScanStorage() (core.Storage, error) {
+	return core.ScanStorage(func(storage core.Storage) {
+		if a.ctx != nil {
+			wailsruntime.EventsEmit(a.ctx, "storage:progress", storage)
+		}
 	})
+}
+
+func (a *App) RevealPath(path string) error {
+	clean, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(clean)
+	if err != nil {
+		return err
+	}
+	if runtime.GOOS == "darwin" {
+		if info.IsDir() {
+			return exec.Command("open", clean).Run()
+		}
+		return exec.Command("open", "-R", clean).Run()
+	}
+	if runtime.GOOS == "windows" {
+		if info.IsDir() {
+			return exec.Command("explorer.exe", clean).Run()
+		}
+		return exec.Command("explorer.exe", "/select,"+clean).Run()
+	}
+	return exec.Command("xdg-open", filepath.Dir(clean)).Run()
 }
 
 func (a *App) PreviewCleanup(request core.CleanupRequest) (core.CleanupPreview, error) {

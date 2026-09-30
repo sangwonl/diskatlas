@@ -273,6 +273,61 @@ export namespace core {
 	        this.olderThanDays = source["olderThanDays"];
 	    }
 	}
+	export class StorageCategory {
+	    id: string;
+	    bytes: number;
+	    files: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new StorageCategory(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.bytes = source["bytes"];
+	        this.files = source["files"];
+	    }
+	}
+	export class Storage {
+	    total: number;
+	    available: number;
+	    categories: StorageCategory[];
+	    skipped: number;
+	    complete: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Storage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.total = source["total"];
+	        this.available = source["available"];
+	        this.categories = this.convertValues(source["categories"], StorageCategory);
+	        this.skipped = source["skipped"];
+	        this.complete = source["complete"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 
 }
 

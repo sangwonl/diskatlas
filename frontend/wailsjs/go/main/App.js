@@ -10,6 +10,10 @@ export function PreviewCleanup(arg1) {
   return window['go']['main']['App']['PreviewCleanup'](arg1);
 }
 
+export function RevealPath(arg1) {
+  return window['go']['main']['App']['RevealPath'](arg1);
+}
+
 export function Rules() {
   return window['go']['main']['App']['Rules']();
 }
@@ -18,6 +22,10 @@ export function Scan(arg1) {
   return window['go']['main']['App']['Scan'](arg1);
 }
 
-export function SelectDirectory() {
-  return window['go']['main']['App']['SelectDirectory']();
+export function ScanStorage() {
+  return window['go']['main']['App']['ScanStorage']();
+}
+
+export function StorageInfo() {
+  return window['go']['main']['App']['StorageInfo']();
 }

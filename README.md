@@ -21,7 +21,9 @@ gvm use go1.25.0
 wails dev
 ```
 
-The Wails app uses a bounded Go worker pool to discover and measure candidates concurrently. Use `Choose folder` to open the native folder picker, or type a path directly. The native UI can permanently delete selected items or move them into Shed's quarantine.
+The Wails app automatically analyzes the current user's files on launch. It displays operating-system disk capacity and available space, plus a segmented chart of readable user files by type. System data and unclassified usage remain explicitly separate; external disks and other users' files are not inventoried. Shared filesystem blocks mean category totals are estimates, not guaranteed reclaimable space.
+
+Cleanup candidates appear as they are measured by a bounded Go worker pool. Each category initially shows its three largest candidates, with an option to expand the rest. Individual and group actions open a review dialog where you can reveal the file's location before permanent deletion. Personal-file acknowledgement and deletion confirmation happen there.
 
 ## Safety model
 
