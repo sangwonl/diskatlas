@@ -1,0 +1,15 @@
+{
+  "name": "shed",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A safety-first disk reclaim tool for developer artifacts.",
+  "type": "module",
+  "bin": {
+    "shed": "./bin/shed.mjs"
+  },
+  "scripts": {
+    "scan": "node ./bin/shed.mjs scan",
+    "gui": "node ./bin/shed.mjs gui",
+    "start": "node ./bin/shed.mjs gui"
+  }
+}

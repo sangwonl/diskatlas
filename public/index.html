@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shed — reclaim disk space safely</title>
+  <style>
+    :root { color-scheme: dark; --bg:#10151d; --panel:#171e29; --line:#2b3544; --muted:#8f9aaa; --text:#edf2f7; --blue:#6ea8fe; --safe:#53d18d; --caution:#e9bd62; --review:#e88d61; }
+    * { box-sizing:border-box } body { margin:0; background:radial-gradient(circle at 75% -10%, #263a54 0, var(--bg) 42%); color:var(--text); font:14px/1.5 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:28px 42px; border-bottom:1px solid var(--line); } .brand { display:flex; gap:12px; align-items:center; } .mark { width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,#6ea8fe,#8b7bff);display:grid;place-items:center;font-weight:800;color:#09111e;font-size:20px; } h1 { font-size:20px;margin:0 } .subtitle { color:var(--muted);font-size:12px; }
+    main { max-width:1220px; margin:0 auto; padding:34px 30px 60px; } .hero { display:flex; justify-content:space-between; align-items:end; gap:20px; margin-bottom:28px; } h2 { margin:0;font-size:30px;letter-spacing:-.03em; } .hero p { color:var(--muted);margin:5px 0 0; } button { border:0;border-radius:10px;padding:11px 17px;background:var(--blue);color:#08111e;font-weight:750;cursor:pointer; } button:disabled { opacity:.6;cursor:wait; }
+    .cards { display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px; } .card,.panel { background:rgba(23,30,41,.9);border:1px solid var(--line);border-radius:16px; } .card { padding:18px; } .card .label { color:var(--muted);font-size:12px; } .card .value { font-size:25px;font-weight:750;margin:5px 0; } .safe { color:var(--safe) }.caution { color:var(--caution) }.review { color:var(--review) }.protected { color:#b4bdca }
+    .panel { overflow:hidden; } .panel-head { display:flex;justify-content:space-between;align-items:center;padding:17px 20px;border-bottom:1px solid var(--line); } .panel-head h3 { margin:0;font-size:15px; } input,select { background:#101722;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px; } .filters { display:flex;gap:8px; } table { width:100%;border-collapse:collapse; } th,td { text-align:left;padding:13px 20px;border-bottom:1px solid #222c38;vertical-align:top; } th { color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em; } td small { display:block;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:580px; } .badge { display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:700;background:#233040; } .empty { padding:50px;text-align:center;color:var(--muted); } .note { color:var(--muted);font-size:12px;margin:15px 2px; } @media(max-width:800px) { header {padding:20px}.hero{display:block}.hero button{margin-top:15px}.cards{grid-template-columns:repeat(2,1fr)} main{padding:25px 16px} th:nth-child(3),td:nth-child(3){display:none} }
+  </style>
+</head>
+<body>
+  <header><div class="brand"><div class="mark">S</div><div><h1>Shed</h1><div class="subtitle">Reclaim gigabytes. Lose nothing you can't rebuild.</div></div></div><div class="subtitle">Local only · safety-first mode</div></header>
+  <main>
+    <section class="hero"><div><h2>Developer disk health</h2><p>Known build outputs and caches, explained before they are touched.</p></div><button id="scan">Scan home directory</button></section>
+    <section class="cards" id="cards"><div class="card"><div class="label">Status</div><div class="value">Ready</div><div class="label">No files changed</div></div></section>
+    <section class="panel"><div class="panel-head"><h3>Reclaim candidates</h3><div class="filters"><select id="tier"><option value="">All tiers</option><option>safe</option><option>caution</option><option>review</option></select><input id="query" placeholder="Filter path or rule" /></div></div><div id="table"><div class="empty">Start a scan to see safe, explainable candidates.</div></div></section>
+    <div class="note">Protected paths, git tracked files, application bundles, and permanent deletion are blocked by design. “Clean” previews only; this GUI never removes system files.</div>
+  </main>
+  <script>
+    const esc = (s) => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const fmt = (n) => { const u=['B','KB','MB','GB','TB']; let i=0; while(n>=1024&&i<u.length-1){n/=1024;i++} return `${n.toFixed(n>=100?0:n>=10?1:2)} ${u[i]}` };
+    let items=[]; const scanButton=document.querySelector('#scan');
+    function render(data) { items=data.items||[]; const s=data.summary||{}; document.querySelector('#cards').innerHTML=['safe','caution','review','protected'].map(t=>`<div class="card"><div class="label">${t[0].toUpperCase()+t.slice(1)}</div><div class="value ${t}">${fmt(s[t]?.bytes||0)}</div><div class="label">${s[t]?.count||0} items</div></div>`).join(''); draw(); }
+    function draw() { const tier=document.querySelector('#tier').value, q=document.querySelector('#query').value.toLowerCase(); const rows=items.filter(i=>(!tier||i.tier===tier)&&(!q||`${i.path} ${i.ruleId} ${i.name}`.toLowerCase().includes(q))); document.querySelector('#table').innerHTML=rows.length?`<table><thead><tr><th>Item</th><th>Tier</th><th>Size</th><th>Why</th></tr></thead><tbody>${rows.map(i=>`<tr><td><strong>${esc(i.name)}</strong><small>${esc(i.path)}</small></td><td><span class="badge ${i.tier}">${i.tier}</span></td><td>${fmt(i.bytes)}<small>${esc(i.cost)} rebuild cost</small></td><td>${esc(i.explanation)}<small>Rebuild: ${esc(i.rebuild)}</small></td></tr>`).join('')}</tbody></table>`:`<div class="empty">No matching items.</div>`; }
+    scanButton.onclick=async()=>{ scanButton.disabled=true; scanButton.textContent='Scanning…'; try { const r=await fetch('/api/scan'); render(await r.json()); } catch(e) { alert(e.message) } finally { scanButton.disabled=false; scanButton.textContent='Scan again'; } };
+    document.querySelector('#tier').onchange=draw; document.querySelector('#query').oninput=draw;
+  </script>
+</body>
+</html>
