@@ -200,6 +200,9 @@ func ScanWithProgress(root string, onProgress func(Progress)) (*Result, error) {
 		return nil, err
 	}
 	candidates = append(candidates, projectCandidates...)
+	if onProgress != nil {
+		onProgress(Progress{Phase: "measure", Scanned: 0, Candidates: int64(len(candidates)), Found: 0})
+	}
 	workerCount := runtime.NumCPU() * 2
 	if workerCount < 4 {
 		workerCount = 4

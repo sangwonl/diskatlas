@@ -144,7 +144,9 @@ async function refresh(){
 }
 EventsOn('scan:progress',p=>{
  if(!busy)return;
- $('#progress').textContent=p.phase==='discover'?'파일 탐색 중…':`정리 후보 ${items.size}개 발견`;
+ if(p.phase==='discover') $('#progress').textContent='파일 탐색 중…';
+ else if(p.candidates>0) $('#progress').textContent=`분석 중 ${Math.min(100,Math.round(p.scanned/p.candidates*100))}% · 정리 후보 ${p.found||items.size}개 발견`;
+ else $('#progress').textContent='분석 준비 중…';
  if(p.item){items.set(p.item.id,p.item);schedule();}
 });
 EventsOn('storage:progress',value=>{if(busy)drawStorage(value);});
