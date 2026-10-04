@@ -20,6 +20,7 @@ const projectRules = [
 ];
 
 function home() { return os.homedir(); }
+function filesystemRoot() { return path.parse(home()).root; }
 function expand(p) {
   if (!p) return p;
   const envMatch = p.match(/^%([^%]+)%(.*)$/);
@@ -206,8 +207,8 @@ async function findProjects(root, options = {}) {
   return results;
 }
 
-export async function scan(scanPaths = [home()], options = {}) {
-  const roots = scanPaths.length ? scanPaths.map(expand) : [home()];
+export async function scan(scanPaths = [filesystemRoot()], options = {}) {
+  const roots = scanPaths.length ? scanPaths.map(expand) : [filesystemRoot()];
   const items = [];
   const seen = new Set();
   const seenGlobal = new Set();

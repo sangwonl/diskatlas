@@ -4,7 +4,11 @@ import {core} from '../models';
 
 export function Analyze(arg1:string):Promise<core.Analysis>;
 
+export function CachedAnalysis(arg1:string):Promise<core.Analysis>;
+
 export function ExecuteCleanup(arg1:core.CleanupRequest):Promise<core.CleanupResult>;
+
+export function FolderMap(arg1:string):Promise<core.FolderMap>;
 
 export function PreviewCleanup(arg1:core.CleanupRequest):Promise<core.CleanupPreview>;
 

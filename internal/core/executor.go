@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -79,6 +80,10 @@ func PreviewCleanup(scan *Result, request CleanupRequest) CleanupPreview {
 			preview.Blocked = append(preview.Blocked, BlockedItem{ID: id, Reason: "Item is not part of the latest scan"})
 			continue
 		}
+		if mode == "quarantine" && item.Action == "command" {
+			preview.Blocked = append(preview.Blocked, BlockedItem{ID: item.ID, Path: item.Path, Reason: "Managed cleanup commands cannot be moved to quarantine"})
+			continue
+		}
 		if reason := validateCleanupItem(scan, item, request.AcknowledgeRisk); reason != "" {
 			preview.Blocked = append(preview.Blocked, BlockedItem{ID: item.ID, Path: item.Path, Reason: reason})
 			continue
@@ -125,7 +130,13 @@ func ExecuteCleanup(scan *Result, request CleanupRequest) (CleanupResult, error)
 			continue
 		}
 		if preview.Mode == "delete" {
-			if err := os.RemoveAll(item.Path); err != nil {
+			var err error
+			if item.Action == "command" {
+				err = executeCommandCleanup(scan, item)
+			} else {
+				err = os.RemoveAll(item.Path)
+			}
+			if err != nil {
 				result.Failed = append(result.Failed, BlockedItem{ID: item.ID, Path: item.Path, Reason: err.Error()})
 				continue
 			}
@@ -158,12 +169,54 @@ func ExecuteCleanup(scan *Result, request CleanupRequest) (CleanupResult, error)
 	return result, nil
 }
 
+// RemoveCompleted updates an in-memory scan after cleanup so the next action
+// can use the remaining candidates without walking the disk again.
+func RemoveCompleted(scan *Result, completed []Item) {
+	if scan == nil || len(completed) == 0 {
+		return
+	}
+	removed := make(map[string]struct{}, len(completed))
+	for _, item := range completed {
+		removed[item.ID] = struct{}{}
+	}
+	remaining := make([]Item, 0, len(scan.Items)-len(completed))
+	for _, item := range scan.Items {
+		if _, ok := removed[item.ID]; !ok {
+			remaining = append(remaining, item)
+		}
+	}
+	scan.Items = remaining
+	scan.Summary = map[string]TierSummary{string(Safe): {}, string(Caution): {}, string(Review): {}, string(Protected): {}}
+	for _, item := range remaining {
+		summary := scan.Summary[string(item.Tier)]
+		summary.Bytes += item.Bytes
+		summary.Count++
+		scan.Summary[string(item.Tier)] = summary
+	}
+	scan.Groups = makeGroups(remaining)
+	for index := range scan.Directories {
+		for _, item := range completed {
+			if !isWithin(scan.Directories[index].Path, item.Path) {
+				continue
+			}
+			scan.Directories[index].CandidateBytes -= item.Bytes
+			scan.Directories[index].CandidateFiles--
+		}
+		if scan.Directories[index].CandidateBytes < 0 {
+			scan.Directories[index].CandidateBytes = 0
+		}
+		if scan.Directories[index].CandidateFiles < 0 {
+			scan.Directories[index].CandidateFiles = 0
+		}
+	}
+}
+
 func validateCleanupItem(scan *Result, item Item, acknowledgeRisk bool) string {
 	clean, err := filepath.Abs(item.Path)
 	if err != nil || clean != filepath.Clean(item.Path) {
 		return "Path could not be normalized safely"
 	}
-	if item.Tier == Protected || isProtected(clean) {
+	if item.Action != "command" && (item.Tier == Protected || isProtected(clean)) {
 		return "Protected paths cannot be cleaned by Shed"
 	}
 	if (item.Tier == Caution || item.Tier == Review) && !acknowledgeRisk {
@@ -194,19 +247,19 @@ func validateCleanupItem(scan *Result, item Item, acknowledgeRisk bool) string {
 	if err != nil || resolved != clean {
 		return "Path contains a symbolic-link escape"
 	}
-	if !matchesRule(item) {
+	if !matchesRule(scan, item) {
 		return "Path no longer matches its discovery rule"
 	}
 	if item.ProjectPath != "" && gitTracked(item.ProjectPath, item.Path) && !acknowledgeRisk {
 		return "Git now tracks this path; explicit risk acknowledgement is required"
 	}
-	if pathInUse(clean) {
+	if item.Action != "command" && pathInUse(clean) {
 		return "Path is currently in use by another process"
 	}
 	return ""
 }
 
-func matchesRule(item Item) bool {
+func matchesRule(scan *Result, item Item) bool {
 	for _, rule := range Rules() {
 		if rule.ID != item.RuleID {
 			continue
@@ -226,6 +279,36 @@ func matchesRule(item Item) bool {
 			}
 			return rule.OlderThanDays == 0 || time.Since(info.ModTime()) >= time.Duration(rule.OlderThanDays)*24*time.Hour
 		}
+		if rule.Kind == "directory" {
+			info, err := os.Lstat(item.Path)
+			if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return false
+			}
+			bytes, files := measure(item.Path, &sync.Map{}, nil)
+			return bytes >= rule.MinBytes && files >= rule.MinFiles
+		}
+		if rule.Kind == "app" {
+			home, _ := os.UserHomeDir()
+			for _, candidate := range appCandidates(home) {
+				if candidate.rule.ID == item.RuleID && filepath.Clean(candidate.target) == filepath.Clean(item.Path) {
+					return true
+				}
+			}
+			return false
+		}
+		if rule.Kind == "command" {
+			if scan == nil {
+				return false
+			}
+			for _, root := range scan.Roots {
+				for _, candidate := range commandCandidatesForRule(root, rule) {
+					if candidate.rule.ID == item.RuleID && filepath.Clean(candidate.target) == filepath.Clean(item.Path) && candidate.rule.Action == "command" {
+						return true
+					}
+				}
+			}
+			return false
+		}
 		if item.ProjectPath == "" || !hasAny(item.ProjectPath, rule.Markers) {
 			return false
 		}
@@ -236,6 +319,46 @@ func matchesRule(item Item) bool {
 		}
 	}
 	return false
+}
+
+func executeCommandCleanup(scan *Result, item Item) error {
+	var selected *Rule
+	if scan == nil {
+		return errors.New("scan context is unavailable for managed cleanup")
+	}
+	for _, root := range scan.Roots {
+		for _, rule := range Rules() {
+			if rule.ID != item.RuleID || rule.Kind != "command" {
+				continue
+			}
+			for _, candidate := range commandCandidatesForRule(root, rule) {
+				if candidate.rule.ID == item.RuleID && filepath.Clean(candidate.target) == filepath.Clean(item.Path) && candidate.rule.Action == "command" {
+					copy := candidate.rule
+					selected = &copy
+					break
+				}
+			}
+			break
+		}
+		if selected != nil {
+			break
+		}
+	}
+	if selected == nil || len(selected.Command) == 0 {
+		return errors.New("no approved cleanup command is registered for this item")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, selected.Command[0], selected.Command[1:]...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("%s cleanup failed: %s", selected.Name, message)
+	}
+	return nil
 }
 
 func pathInUse(path string) bool {

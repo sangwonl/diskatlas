@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { scan, summarize } from './core.mjs';
 
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
+const filesystemRoot = path.parse(process.env.HOME || process.cwd()).root;
 
 export function startServer({ port = 4173, open = true } = {}) {
   let current = null;
@@ -13,7 +14,7 @@ export function startServer({ port = 4173, open = true } = {}) {
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
       if (url.pathname === '/api/scan') {
-        current = await scan([url.searchParams.get('path') || process.env.HOME || process.cwd()]);
+        current = await scan([url.searchParams.get('path') || filesystemRoot]);
         return sendJson(res, { ...current, summary: summarize(current.items) });
       }
       if (url.pathname === '/api/items') {

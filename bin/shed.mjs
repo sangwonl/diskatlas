@@ -17,7 +17,13 @@ const command = args[0] || 'scan';
 async function ensureState() { await fs.mkdir(stateDir, { recursive: true }); }
 function flag(name) { return args.includes(name); }
 function value(name) { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null; }
+function filesystemRoot() { return path.parse(os.homedir()).root; }
 function pathsFromArgs() { return args.slice(1).filter((x) => !x.startsWith('-') && !['safe', 'caution', 'review', 'protected'].includes(x)); }
+function scanRootsFromArgs() {
+  const named = value('--root') || value('--scan-root') || value('--base-dir');
+  const paths = pathsFromArgs();
+  return named ? [named] : (paths.length ? paths : [filesystemRoot()]);
+}
 function printJson(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 function tierIcon(tier) { return { safe: '🟢', caution: '🟡', review: '🟠', protected: '🔴' }[tier]; }
 function insideHome(p) { const home = os.homedir(); const resolved = path.resolve(p); return resolved === home || resolved.startsWith(`${home}${path.sep}`); }
@@ -98,7 +104,7 @@ async function run() {
   }
   if (command === 'scan') {
     await ensureState();
-    const result = await scan(pathsFromArgs().length ? pathsFromArgs() : [os.homedir()]);
+    const result = await scan(scanRootsFromArgs());
     await fs.writeFile(lastScanPath, JSON.stringify(result, null, 2));
     if (flag('--json')) printJson(result); else printSummary(result);
     return;

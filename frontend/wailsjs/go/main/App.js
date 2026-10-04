@@ -6,8 +6,16 @@ export function Analyze(arg1) {
   return window['go']['main']['App']['Analyze'](arg1);
 }
 
+export function CachedAnalysis(arg1) {
+  return window['go']['main']['App']['CachedAnalysis'](arg1);
+}
+
 export function ExecuteCleanup(arg1) {
   return window['go']['main']['App']['ExecuteCleanup'](arg1);
+}
+
+export function FolderMap(arg1) {
+  return window['go']['main']['App']['FolderMap'](arg1);
 }
 
 export function PreviewCleanup(arg1) {
