@@ -18,8 +18,20 @@ export function FolderMap(arg1) {
   return window['go']['main']['App']['FolderMap'](arg1);
 }
 
+export function MeasureFolderMap(arg1, arg2) {
+  return window['go']['main']['App']['MeasureFolderMap'](arg1, arg2);
+}
+
 export function PreviewCleanup(arg1) {
   return window['go']['main']['App']['PreviewCleanup'](arg1);
+}
+
+export function RefreshFolderMap(arg1, arg2) {
+  return window['go']['main']['App']['RefreshFolderMap'](arg1, arg2);
+}
+
+export function ReloadFolderMap(arg1) {
+  return window['go']['main']['App']['ReloadFolderMap'](arg1);
 }
 
 export function RevealPath(arg1) {

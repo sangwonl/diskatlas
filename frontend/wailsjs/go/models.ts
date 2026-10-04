@@ -362,6 +362,11 @@ export namespace core {
 	    files: number;
 	    modifiedAt?: string;
 	    directory: boolean;
+	    sizeKnown: boolean;
+	    sizeComplete: boolean;
+	    sizeStale: boolean;
+	    statModTime: number;
+	    statSize: number;
 
 	    static createFrom(source: any = {}) {
 	        return new FolderMapEntry(source);
@@ -375,6 +380,11 @@ export namespace core {
 	        this.files = source["files"];
 	        this.modifiedAt = source["modifiedAt"];
 	        this.directory = source["directory"];
+	        this.sizeKnown = source["sizeKnown"];
+	        this.sizeComplete = source["sizeComplete"];
+	        this.sizeStale = source["sizeStale"];
+	        this.statModTime = source["statModTime"];
+	        this.statSize = source["statSize"];
 	    }
 	}
 	export class FolderMap {
@@ -383,8 +393,12 @@ export namespace core {
 	    name: string;
 	    bytes: number;
 	    files: number;
+	    directories: number;
 	    modifiedAt?: string;
 	    generatedAt?: string;
+	    measured: boolean;
+	    sizeKnown: boolean;
+	    sizeComplete: boolean;
 	    children: FolderMapEntry[];
 
 	    static createFrom(source: any = {}) {
@@ -398,8 +412,12 @@ export namespace core {
 	        this.name = source["name"];
 	        this.bytes = source["bytes"];
 	        this.files = source["files"];
+	        this.directories = source["directories"];
 	        this.modifiedAt = source["modifiedAt"];
 	        this.generatedAt = source["generatedAt"];
+	        this.measured = source["measured"];
+	        this.sizeKnown = source["sizeKnown"];
+	        this.sizeComplete = source["sizeComplete"];
 	        this.children = this.convertValues(source["children"], FolderMapEntry);
 	    }
 

@@ -46,7 +46,6 @@ func (a *App) effectiveRoot(root string) string {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	core.WarmFolderMap(a.defaultRoot)
 }
 
 func (a *App) Scan(root string) (*core.Result, error) {
@@ -73,8 +72,6 @@ func (a *App) Analyze(root string) (*core.Analysis, error) {
 	if err != nil {
 		return nil, err
 	}
-	core.ResetFolderMap(a.effectiveRoot(root))
-	core.WarmFolderMap(a.effectiveRoot(root))
 	a.mu.Lock()
 	a.lastScan = analysis.Result
 	a.mu.Unlock()
@@ -94,10 +91,33 @@ func (a *App) CachedAnalysis(root string) (*core.Analysis, error) {
 	return analysis, nil
 }
 
-// FolderMap returns one directory level from the cached file manifest. It is
-// intentionally separate from Analyze so browsing never triggers a rescan.
+// FolderMap reads only one directory level without descending into folders.
 func (a *App) FolderMap(path string) (*core.FolderMap, error) {
-	return core.CachedFolderMap(a.defaultRoot, path)
+	return core.ReadFolderMap(a.defaultRoot, path)
+}
+
+// ReloadFolderMap rereads the current directory level and reuses indexed child sizes.
+func (a *App) ReloadFolderMap(path string) (*core.FolderMap, error) {
+	return core.ReloadFolderMap(a.defaultRoot, path)
+}
+
+// MeasureFolderMap recursively measures the opened folder's immediate children.
+func (a *App) MeasureFolderMap(path, requestID string) (*core.FolderMap, error) {
+	return a.measureFolderMap(path, requestID, false)
+}
+
+// RefreshFolderMap discards the saved measurements and recalculates this folder.
+func (a *App) RefreshFolderMap(path, requestID string) (*core.FolderMap, error) {
+	return a.measureFolderMap(path, requestID, true)
+}
+
+func (a *App) measureFolderMap(path, requestID string, refresh bool) (*core.FolderMap, error) {
+	return core.MeasureFolderMap(a.defaultRoot, path, refresh, func(progress core.Progress) {
+		if a.ctx != nil {
+			progress.RequestID = requestID
+			wailsruntime.EventsEmit(a.ctx, "scan:progress", progress)
+		}
+	})
 }
 
 func (a *App) Rules() []core.Rule {

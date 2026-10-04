@@ -10,7 +10,13 @@ export function ExecuteCleanup(arg1:core.CleanupRequest):Promise<core.CleanupRes
 
 export function FolderMap(arg1:string):Promise<core.FolderMap>;
 
+export function MeasureFolderMap(arg1:string,arg2:string):Promise<core.FolderMap>;
+
 export function PreviewCleanup(arg1:core.CleanupRequest):Promise<core.CleanupPreview>;
+
+export function RefreshFolderMap(arg1:string,arg2:string):Promise<core.FolderMap>;
+
+export function ReloadFolderMap(arg1:string):Promise<core.FolderMap>;
 
 export function RevealPath(arg1:string):Promise<void>;
 

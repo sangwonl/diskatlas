@@ -1,9 +1,14 @@
 import React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { analyze, folderMap, onScanProgress, revealPath, storageInfo } from './lib/api';
+import { folderMap, measureFolderMap, onScanProgress, refreshFolderMap, reloadFolderMap, revealPath, storageInfo } from './lib/api';
 import { layoutTreemap } from './lib/treemap';
 
 const DAY = 86_400_000;
+
+function hasMeasuredFolderMap(map) {
+  const generatedAt = Date.parse(map?.generatedAt || '');
+  return Number.isFinite(generatedAt);
+}
 
 function bytes(value) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -31,10 +36,23 @@ function modifiedLabel(value) {
   return `${Math.floor(days / 365)}년 전 변경`;
 }
 
+function sizeLabel(item) {
+  if (item.sizeKnown === false) return '용량 미확인';
+  if (item.sizeStale) return `≈ ${bytes(item.bytes)}`;
+  return `${item.sizeComplete === false ? '≥ ' : ''}${bytes(item.bytes)}`;
+}
+
 function pathParts(path) {
   if (!path || path === '/') return [{ label: '/', path: '/' }];
   const parts = path.split('/').filter(Boolean);
   return [{ label: '/', path: '/' }, ...parts.map((label, index) => ({ label, path: `/${parts.slice(0, index + 1).join('/')}` }))];
+}
+
+function layoutEntries(data) {
+  const children = data?.children || [];
+  return children
+    .filter(child => child.sizeKnown !== false && Number(child.bytes || 0) > 0)
+    .map(child => ({ ...child, layoutBytes: Number(child.bytes || 0) }));
 }
 
 const MIN_TILE_AREA_PX = 4500;
@@ -67,10 +85,11 @@ function createVirtualGroup(rows, direct, virtualDepth) {
   const sortedSmall = [...rows].sort((a, b) => Number(b.bytes || 0) - Number(a.bytes || 0));
   const representative = sortedSmall[0];
   const groupedBytes = sortedSmall.reduce((sum, row) => sum + Number(row.bytes || 0), 0);
-  const directBytes = direct.reduce((sum, row) => sum + Number(row.bytes || 0), 0);
-  const scaledBytes = groupedBytes * VIRTUAL_LAYOUT_SCALE;
-  const maxVisualBytes = directBytes > 0
-    ? directBytes * MAX_VIRTUAL_AREA_SHARE / (1 - MAX_VIRTUAL_AREA_SHARE)
+  const groupedLayoutBytes = sortedSmall.reduce((sum, row) => sum + Number(row.layoutBytes ?? row.bytes ?? 0), 0);
+  const directLayoutBytes = direct.reduce((sum, row) => sum + Number(row.layoutBytes ?? row.bytes ?? 0), 0);
+  const scaledBytes = groupedLayoutBytes * VIRTUAL_LAYOUT_SCALE;
+  const maxVisualBytes = directLayoutBytes > 0
+    ? directLayoutBytes * MAX_VIRTUAL_AREA_SHARE / (1 - MAX_VIRTUAL_AREA_SHARE)
     : scaledBytes;
   const virtual = {
     name: `${representative.name || '항목'}${sortedSmall.length > 1 ? ` 외 ${sortedSmall.length - 1}개` : ''}`,
@@ -81,6 +100,8 @@ function createVirtualGroup(rows, direct, virtualDepth) {
     modifiedAt: sortedSmall.reduce((latest, row) => (!latest || Date.parse(row.modifiedAt || '') > Date.parse(latest)) ? row.modifiedAt : latest, ''),
     directory: true,
     virtual: true,
+    sizeKnown: sortedSmall.every(row => row.sizeKnown !== false),
+    sizeComplete: sortedSmall.every(row => row.sizeComplete !== false),
     virtualDepth: virtualDepth + 1,
     groupedCount: sortedSmall.length,
     children: sortedSmall,
@@ -132,9 +153,9 @@ function Treemap({ data, selected, onSelect, onOpen, onHover, onPrefetch }) {
     window.addEventListener('resize', update);
     return () => { observer?.disconnect(); window.removeEventListener('resize', update); };
   }, [data]);
-  const displayChildren = useMemo(() => groupSmallChildren(data?.children || [], viewport, data?.virtualDepth || 0), [data, viewport]);
+  const displayChildren = useMemo(() => groupSmallChildren(layoutEntries(data), viewport, data?.virtualDepth || 0), [data, viewport]);
   const cells = useMemo(() => layoutTreemap(displayChildren, viewport), [displayChildren, viewport]);
-  if (!cells.length) return <div className="map-empty">이 폴더에는 표시할 파일이 없습니다.</div>;
+  if (!cells.length) return null;
   return (
     <div ref={mapRef} className="treemap" role="tree" aria-label={`${data.path} 용량 지도`}>
       {cells.map(cell => {
@@ -144,7 +165,7 @@ function Treemap({ data, selected, onSelect, onOpen, onHover, onPrefetch }) {
             type="button"
             role="treeitem"
             key={cell.path}
-            className={`map-cell density-${density} ${ageClass(cell.modifiedAt)} ${selected?.path === cell.path ? 'selected' : ''}`}
+            className={`map-cell density-${density} ${cell.sizeKnown === false ? 'size-unknown' : ageClass(cell.modifiedAt)} ${selected?.path === cell.path ? 'selected' : ''}`}
             style={{ left: `${cell.x}%`, top: `${cell.y}%`, width: `${cell.width}%`, height: `${cell.height}%` }}
             onClick={() => onSelect(cell)}
             onDoubleClick={() => cell.directory && onOpen(cell)}
@@ -152,10 +173,10 @@ function Treemap({ data, selected, onSelect, onOpen, onHover, onPrefetch }) {
             onMouseLeave={() => onHover(null)}
             onFocus={() => onHover(cell)}
             onBlur={() => onHover(null)}
-            title={`${cell.virtual ? cell.name : cell.path}\n${bytes(cell.bytes)} · ${modifiedLabel(cell.modifiedAt)}`}
+            title={`${cell.virtual ? cell.name : cell.path}\n${sizeLabel(cell)}${cell.sizeStale ? ' · 저장된 측정값' : cell.sizeComplete === false ? ' · 하위 일부 용량 제외' : ''} · ${modifiedLabel(cell.modifiedAt)}`}
           >
             {density >= 1 && <span className="cell-name">{cell.name}</span>}
-            {density >= 2 && <span className="cell-size">{bytes(cell.bytes)}{cell.virtual && cell.groupedCount > 1 ? ` · ${cell.groupedCount}개` : ''}</span>}
+            {density >= 2 && <span className="cell-size">{`${sizeLabel(cell)}${cell.virtual && cell.groupedCount > 1 ? ` · ${cell.groupedCount}개` : ''}`}</span>}
             {density >= 3 && <span className="cell-date">{modifiedLabel(cell.modifiedAt)}</span>}
           </button>
         );
@@ -167,48 +188,141 @@ function Treemap({ data, selected, onSelect, onOpen, onHover, onPrefetch }) {
 export default function App() {
   const mapCacheRef = useRef(new Map());
   const prefetchingRef = useRef(new Set());
+  const currentPathRef = useRef(null);
+  const loadRequestRef = useRef(0);
+  const activeProgressRequestRef = useRef('');
+  const progressCountRef = useRef(0);
+  const initializedRef = useRef(false);
   const [data, setData] = useState(null);
   const [storage, setStorage] = useState(null);
   const [history, setHistory] = useState([]);
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState(null);
   const [hovered, setHovered] = useState(null);
   const [virtualStack, setVirtualStack] = useState([]);
   const [error, setError] = useState('');
 
-  const loadMap = async (path = '', remember = false) => {
-    const cached = mapCacheRef.current.get(path);
-    if (cached) {
-      if (remember && data) setHistory(stack => [...stack, data.path]);
-      setData(cached);
-      setVirtualStack([]);
-      setSelected(null);
-      setHovered(null);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
+  const acceptMap = next => {
+    currentPathRef.current = next.path;
+    setData(next);
+    setLoading(false);
+  };
+
+  const updateParentCache = next => {
+    const parentPath = next.path.slice(0, next.path.lastIndexOf('/')) || '/';
+    if (parentPath === next.path) return;
+    const parent = mapCacheRef.current.get(parentPath);
+    if (!parent) return;
+    const children = parent.children.map(child => child.path === next.path
+      ? { ...child, bytes: next.bytes, files: next.files, modifiedAt: next.modifiedAt, sizeKnown: next.sizeKnown, sizeComplete: next.sizeComplete }
+      : child);
+    const measured = children.every(child => child.sizeComplete === true);
+    mapCacheRef.current.set(parentPath, {
+      ...parent,
+      children,
+      bytes: children.reduce((sum, child) => sum + Number(child.bytes || 0), 0),
+      files: children.reduce((sum, child) => sum + Number(child.files || 0), 0),
+      measured,
+      sizeKnown: true,
+      sizeComplete: measured,
+      modifiedAt: children.reduce((latest, child) => !latest || Date.parse(child.modifiedAt || '') > Date.parse(latest) ? child.modifiedAt : latest, ''),
+    });
+  };
+
+  const reloadCurrentMap = async () => {
+    if (!data || loading || refreshing || virtualStack.length) return;
+    const request = ++loadRequestRef.current;
+    activeProgressRequestRef.current = '';
+    setRefreshing(true);
     setError('');
     try {
-      const next = await folderMap(path);
-      mapCacheRef.current.set(path, next);
+      const next = await reloadFolderMap(data.path);
+      if (request !== loadRequestRef.current) return;
       mapCacheRef.current.set(next.path, next);
+      updateParentCache(next);
+      acceptMap(next);
+      setSelected(null);
+      setHovered(null);
+      storageInfo().then(setStorage).catch(() => {});
+    } catch (reason) {
+      if (request === loadRequestRef.current) setError(String(reason));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const loadMap = async (path = '', remember = false, force = false, measure = false) => {
+    const key = path || data?.root || currentPathRef.current || '/';
+    const cached = mapCacheRef.current.get(key);
+    if (cached && !force && hasMeasuredFolderMap(cached) && (!measure || cached.sizeKnown !== false)) {
+      loadRequestRef.current += 1;
+      activeProgressRequestRef.current = '';
       if (remember && data) setHistory(stack => [...stack, data.path]);
-      setData(next);
+      acceptMap(cached);
+      setScanning(false);
+      setProgress(null);
       setVirtualStack([]);
       setSelected(null);
       setHovered(null);
+      return cached;
+    }
+    const request = ++loadRequestRef.current;
+    const progressRequestID = measure ? String(request) : '';
+    activeProgressRequestRef.current = progressRequestID;
+    progressCountRef.current = 0;
+    const previousPath = data?.path;
+    if (remember && previousPath) setHistory(stack => [...stack, previousPath]);
+    setLoading(true);
+    setRefreshing(false);
+    setScanning(measure && force);
+    setProgress(measure && force ? { phase: 'folder-map', requestID: progressRequestID, filesScanned: 0, path } : null);
+    setError('');
+    try {
+      let next;
+      if (measure && force) {
+        next = await refreshFolderMap(path, progressRequestID);
+      } else if (measure) {
+        next = await folderMap(path);
+        if (request !== loadRequestRef.current) return null;
+        if (!next.generatedAt || next.sizeKnown === false) {
+          setScanning(true);
+          setProgress({ phase: 'folder-map', requestID: progressRequestID, filesScanned: 0, path });
+          next = await measureFolderMap(path, progressRequestID);
+        }
+      } else {
+        next = await folderMap(path);
+      }
+      if (request !== loadRequestRef.current) return null;
+      mapCacheRef.current.set(path, next);
+      mapCacheRef.current.set(next.path, next);
+      if (next.generatedAt) updateParentCache(next);
+      acceptMap(next);
+      setVirtualStack([]);
+      setSelected(null);
+      setHovered(null);
+      return next;
     } catch (reason) {
-      setError(String(reason));
+      if (request === loadRequestRef.current) {
+        setError(String(reason));
+        if (remember && previousPath) setHistory(stack => stack.at(-1) === previousPath ? stack.slice(0, -1) : stack);
+      }
+      return null;
     } finally {
-      setLoading(false);
+      if (request === loadRequestRef.current) {
+        activeProgressRequestRef.current = '';
+        setLoading(false);
+        setScanning(false);
+        setProgress(null);
+      }
     }
   };
 
   const prefetchMap = path => {
-    if (mapCacheRef.current.has(path) || prefetchingRef.current.has(path)) return;
+    if (scanning) return;
+    if (hasMeasuredFolderMap(mapCacheRef.current.get(path)) || prefetchingRef.current.has(path)) return;
     prefetchingRef.current.add(path);
     folderMap(path)
       .then(next => {
@@ -221,30 +335,36 @@ export default function App() {
 
   useEffect(() => {
     storageInfo().then(setStorage).catch(() => {});
-    loadMap();
-    const cancel = onScanProgress(setProgress);
+    const cancel = onScanProgress(nextProgress => {
+      if (nextProgress.phase === 'folder-map' && nextProgress.requestID === activeProgressRequestRef.current) {
+        const count = Math.max(progressCountRef.current, Number(nextProgress.filesScanned || 0));
+        progressCountRef.current = count;
+        setProgress({ ...nextProgress, filesScanned: count });
+      }
+    });
+    // Show the root's immediate entries first. On a cold cache, calculate its
+    // top-level folder sizes progressively, then reuse that local snapshot.
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      const initialize = async () => {
+        const rootMap = await loadMap('', false, true, false);
+        if (rootMap && !rootMap.generatedAt) {
+          await new Promise(resolve => requestAnimationFrame(resolve));
+          await loadMap(rootMap.path, false, false, true);
+        }
+      };
+      initialize();
+    }
     return typeof cancel === 'function' ? cancel : undefined;
   }, []);
 
-  const startAnalysis = async () => {
-    setScanning(true);
-    setProgress({ phase: 'discover', filesScanned: 0 });
-    setError('');
-    mapCacheRef.current.clear();
-    prefetchingRef.current.clear();
-    try {
-      await analyze();
-      await Promise.all([loadMap(data?.path || ''), storageInfo().then(setStorage)]);
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setScanning(false);
-      setProgress(null);
-    }
-  };
-
   const goBack = async () => {
     if (virtualStack.length) {
+      loadRequestRef.current += 1;
+      activeProgressRequestRef.current = '';
+      setLoading(false);
+      setScanning(false);
+      setProgress(null);
       setVirtualStack(stack => stack.slice(0, -1));
       setSelected(null);
       setHovered(null);
@@ -253,17 +373,22 @@ export default function App() {
     const target = history.at(-1);
     if (target == null) return;
     setHistory(stack => stack.slice(0, -1));
-    await loadMap(target);
+    await loadMap(target, false, false, true);
   };
 
   const openCell = cell => {
     if (cell.virtual) {
+      loadRequestRef.current += 1;
+      activeProgressRequestRef.current = '';
+      setLoading(false);
+      setScanning(false);
+      setProgress(null);
       setVirtualStack(stack => [...stack, { group: cell }]);
       setSelected(null);
       setHovered(null);
       return;
     }
-    if (cell.directory) loadMap(cell.path, true);
+    if (cell.directory) loadMap(cell.path, true, false, true);
   };
 
   const jumpTo = async path => {
@@ -274,12 +399,21 @@ export default function App() {
       setHistory(currentParts.slice(0, index));
       setVirtualStack([]);
     }
-    await loadMap(path);
+    await loadMap(path, false, false, true);
   };
 
   const used = storage ? Math.max(0, Number(storage.total) - Number(storage.available)) : 0;
-  const scanCount = Number(progress?.filesScanned || progress?.scanned || 0);
+  const scanCount = Number(progress?.filesScanned || 0);
+  const loadingText = scanning
+    ? `폴더 크기 계산 중 · ${scanCount.toLocaleString()}개 파일 확인`
+    : '폴더를 여는 중…';
   const viewData = virtualStack.length ? virtualStack[virtualStack.length - 1].group : data;
+  const unmeasuredFolders = viewData?.children?.filter(child => child.directory && (
+    child.sizeKnown === false || (child.sizeComplete === false && Number(child.bytes || 0) === 0)
+  )).length || 0;
+  const staleFolders = viewData?.children?.filter(child => child.directory && child.sizeStale).length || 0;
+  const partialFolders = viewData?.children?.filter(child => child.directory && child.sizeKnown !== false && child.sizeComplete === false && !child.sizeStale && Number(child.bytes || 0) > 0).length || 0;
+  const visibleItems = layoutEntries(viewData).length;
   const breadcrumbItems = data ? [
     ...pathParts(data.path),
     ...virtualStack.map((entry, index) => ({ label: entry.group.name, virtualIndex: index, path: `virtual:${index}` })),
@@ -290,7 +424,7 @@ export default function App() {
       <header className="topbar">
         <div className="brand">Shed</div>
         <nav className="breadcrumbs" aria-label="현재 경로">
-          <button className="back" onClick={goBack} disabled={!history.length} aria-label="뒤로">‹</button>
+          <button className="back" onClick={goBack} disabled={!history.length && !virtualStack.length} aria-label="뒤로">‹</button>
           {breadcrumbItems.map((part, index, all) => (
             <span key={part.path}>
               <button onClick={() => part.virtualIndex == null ? jumpTo(part.path) : setVirtualStack(stack => stack.slice(0, part.virtualIndex + 1))} disabled={index === all.length - 1}>{part.label}</button>
@@ -300,7 +434,9 @@ export default function App() {
         </nav>
         <div className="disk-summary">
           {storage && <span>{bytes(storage.available)} 여유 <small>{bytes(used)} 사용</small></span>}
-          <button className="scan-button" onClick={startAnalysis} disabled={scanning}>{scanning ? '분석 중' : '분석'}</button>
+          <button className={`refresh-button${refreshing ? ' refreshing' : ''}`} onClick={reloadCurrentMap} disabled={loading || refreshing || !data || virtualStack.length > 0} aria-label="현재 폴더 새로고침" title="현재 폴더 새로고침">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16.4 8A6.7 6.7 0 0 0 4.6 5.5L3 7.1M3.2 3.7v3.6h3.6M3.6 12a6.7 6.7 0 0 0 11.8 2.5l1.6-1.6m-.2 3.4v-3.6h-3.6" /></svg>
+          </button>
         </div>
       </header>
 
@@ -308,7 +444,12 @@ export default function App() {
         <section className="map-header">
           <div>
             <h1>{viewData?.name || '디스크 지도'}</h1>
-            <p>{viewData ? `${bytes(viewData.bytes)} · ${viewData.files.toLocaleString()}개 파일` : '용량을 면적으로, 최근 변경 시점을 색으로 표시합니다.'}</p>
+            <p>{viewData?.virtual
+              ? `${bytes(viewData.bytes)} · ${Number(viewData.groupedCount || 0).toLocaleString()}개 항목`
+              : viewData ? viewData.sizeComplete
+              ? `${bytes(viewData.bytes)} · ${viewData.files.toLocaleString()}개 파일 · ${viewData.directories.toLocaleString()}개 폴더`
+              : `${bytes(viewData.bytes)} 확인된 용량${staleFolders ? ` · ${staleFolders.toLocaleString()}개 저장된 측정값` : ''}${partialFolders ? ` · ${partialFolders.toLocaleString()}개 일부 확인` : ''}${unmeasuredFolders ? ` · ${unmeasuredFolders.toLocaleString()}개 폴더 용량 미확인` : ''}`
+              : '용량을 면적으로, 최근 변경 시점을 색으로 표시합니다.'}</p>
           </div>
           <div className="legend" aria-label="색상 범례">
             <span className="age-now">7일</span><span className="age-month">30일</span><span className="age-half">6개월</span><span className="age-year">1년</span><span className="age-old">오래됨</span>
@@ -317,16 +458,16 @@ export default function App() {
 
         <section className={`map-stage ${loading ? 'loading' : ''}`}>
           {viewData && <Treemap data={viewData} selected={selected} onSelect={setSelected} onHover={setHovered} onPrefetch={prefetchMap} onOpen={openCell} />}
-          {hovered && <div className="map-hover-card" role="status"><strong>{hovered.name}</strong><span>{bytes(hovered.bytes)} · {modifiedLabel(hovered.modifiedAt)}</span><small>{hovered.virtual ? `${hovered.groupedCount}개 합산 · 가상 폴더` : hovered.path}</small>{hovered.directory && <em>더블 클릭하여 열기</em>}</div>}
-          {!data && !loading && <div className="first-run"><strong>디스크 지도를 만들 준비가 됐습니다.</strong><span>분석하면 큰 폴더부터 지도에 나타납니다.</span><button onClick={startAnalysis}>분석 시작</button></div>}
-          {loading && <div className="map-loading">지도 불러오는 중…</div>}
+          {hovered && <div className="map-hover-card" role="status"><strong>{hovered.name}</strong><span>{sizeLabel(hovered)} · {modifiedLabel(hovered.modifiedAt)}</span><small>{hovered.virtual ? `${hovered.groupedCount}개 합산 · 가상 폴더` : hovered.path}</small>{hovered.sizeStale && <em>저장된 측정값입니다. 상단에서 다시 계산할 수 있습니다.</em>}{hovered.directory && hovered.sizeComplete === false && !hovered.sizeStale && <em>일부 경로 또는 다른 볼륨을 제외한 최소 용량입니다</em>}{hovered.directory && <em>더블 클릭하여 열기</em>}</div>}
+          {!data && !loading && <div className="first-run"><strong>디스크 맵이 없습니다.</strong><span>폴더를 읽을 수 없습니다.</span></div>}
+          {loading && <div className="map-loading" role="status" aria-live="polite"><span className="loading-spinner" /><span>{loadingText}</span>{scanning && progress?.path && <small>{progress.path}</small>}</div>}
         </section>
 
         <footer className="inspector">
           <div className="scan-status">
-            {scanning ? <><span className="pulse" /> 파일 탐색 중 · {scanCount.toLocaleString()}개 확인</> : viewData ? <>{viewData.children.length.toLocaleString()}개 항목 · {data.path}</> : null}
+            {scanning ? <><span className="pulse" /> 폴더 크기 계산 중</> : viewData ? `${visibleItems.toLocaleString()}개 항목${staleFolders ? ` · ${staleFolders}개 저장된 측정값` : ''}${partialFolders ? ` · ${partialFolders}개 일부 확인` : ''}${unmeasuredFolders ? ` · ${unmeasuredFolders}개 폴더 용량 미확인` : ''}` : null}
           </div>
-          {selected && <div className="selection"><strong>{selected.virtual ? selected.name : selected.path}</strong><span>{bytes(selected.bytes)} · {modifiedLabel(selected.modifiedAt)}</span>{selected.directory && <button onClick={() => openCell(selected)}>열기</button>}{!selected.virtual && <button onClick={() => revealPath(selected.path)}>Finder</button>}</div>}
+          {selected && <div className="selection"><strong>{selected.virtual ? selected.name : selected.path}</strong><span>{sizeLabel(selected)} · {modifiedLabel(selected.modifiedAt)}</span>{selected.directory && <button onClick={() => openCell(selected)}>열기</button>}{!selected.virtual && <button onClick={() => revealPath(selected.path)}>Finder</button>}</div>}
         </footer>
         {error && <div className="error" role="alert">{error}</div>}
       </main>

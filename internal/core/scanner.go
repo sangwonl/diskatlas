@@ -92,6 +92,7 @@ type DirectorySummary struct {
 
 type Progress struct {
 	Phase        string   `json:"phase"`
+	RequestID    string   `json:"requestID,omitempty"`
 	Scanned      int64    `json:"scanned"`
 	Candidates   int64    `json:"candidates"`
 	Found        int64    `json:"found"`

@@ -22,10 +22,14 @@ button { font: inherit; }
 .breadcrumbs button:disabled { color: #d9e1e6; cursor: default; }
 .breadcrumbs .back { width: 30px; margin-right: 5px; font-size: 24px; line-height: 24px; }
 .breadcrumbs i { opacity: .35; font-style: normal; }
-.disk-summary { display: flex; align-items: center; gap: 16px; color: #d4dce2; font-size: 13px; }
+.disk-summary { display: flex; align-items: center; gap: 9px; color: #d4dce2; font-size: 13px; }
 .disk-summary small { margin-left: 7px; color: var(--muted); }
-.scan-button, .first-run button { padding: 7px 13px; color: #0a1115; font-weight: 700; background: #e9f4fa; border: 0; border-radius: 7px; cursor: pointer; }
-.scan-button:disabled { opacity: .5; }
+.first-run button { padding: 7px 13px; color: #0a1115; font-weight: 700; background: #e9f4fa; border: 0; border-radius: 7px; cursor: pointer; }
+.refresh-button { display: grid; width: 31px; height: 31px; padding: 6px; place-items: center; color: #d4dce2; background: transparent; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; }
+.refresh-button:hover:not(:disabled) { background: rgba(255,255,255,.07); }
+.refresh-button:disabled { opacity: .42; cursor: default; }
+.refresh-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+.refresh-button.refreshing svg { animation: spin .8s linear infinite; }
 .workspace { display: grid; grid-template-rows: 66px minmax(0, 1fr) 48px; min-height: 0; padding: 0 14px 14px; }
 .map-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .map-header h1 { margin: 0; font-size: 20px; letter-spacing: -.025em; }
@@ -56,6 +60,7 @@ button { font: inherit; }
 .age-half { background: #85803e; }
 .age-year { background: #94633b; }
 .age-old { background: #6c4850; }
+.size-unknown { background: #59656d; }
 .inspector { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-width: 0; color: var(--muted); font-size: 12px; }
 .scan-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pulse { display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--accent); border-radius: 50%; animation: pulse 1s infinite alternate; }
@@ -66,7 +71,11 @@ button { font: inherit; }
 .first-run { flex-direction: column; gap: 10px; }
 .first-run strong { color: #e9eef1; font-size: 20px; }
 .first-run button { margin-top: 6px; }
-.map-loading { background: rgba(8,12,15,.58); backdrop-filter: blur(3px); }
+.map-loading { z-index: 8; flex-direction: column; gap: 10px; background: rgba(8,12,15,.72); backdrop-filter: blur(3px); text-align: center; }
+.map-loading small { max-width: min(70vw, 760px); overflow: hidden; color: #a7b4bb; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.loading-spinner { width: 25px; height: 25px; border: 2px solid rgba(255,255,255,.18); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 .error { position: fixed; right: 16px; bottom: 58px; max-width: 520px; padding: 10px 13px; color: #ffd9d9; background: #5a272a; border-radius: 7px; font-size: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
 @keyframes pulse { to { opacity: .25; transform: scale(.7); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pulse, .loading-spinner { animation: none; } }
 @media (max-width: 760px) { .disk-summary span, .legend { display: none; } .workspace { padding-inline: 8px; } .selection span { display: none; } }
