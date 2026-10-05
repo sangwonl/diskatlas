@@ -1,6 +1,6 @@
 import React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { chooseScanRoot, folderMap, getScanRoot, measureFolderMap, onScanProgress, refreshFolderMap, reloadFolderMap, revealPath, storageInfo } from './lib/api';
+import { chooseScanRoot, folderMap, getScanRoot, measureFolderMap, onScanProgress, refreshFolderMap, revealPath, storageInfo } from './lib/api';
 import { layoutTreemap } from './lib/treemap';
 
 const DAY = 86_400_000;
@@ -264,32 +264,42 @@ export default function App() {
   };
 
   const updateParentCache = next => {
-    const parent = mapCacheRef.current.get(parentPath(next.path));
-    if (!parent) return;
-    const children = parent.children.map(child => child.path === next.path
-      ? { ...child, bytes: next.bytes, files: next.files, modifiedAt: next.modifiedAt, sizeKnown: next.sizeKnown, sizeComplete: next.sizeComplete }
-      : child);
-    const measured = children.every(child => child.sizeComplete === true);
-    mapCacheRef.current.set(parent.path, {
-      ...parent,
-      children,
-      bytes: children.reduce((sum, child) => sum + Number(child.bytes || 0), 0),
-      files: children.reduce((sum, child) => sum + Number(child.files || 0), 0),
-      measured,
-      sizeKnown: true,
-      sizeComplete: measured,
-      modifiedAt: children.reduce((latest, child) => !latest || Date.parse(child.modifiedAt || '') > Date.parse(latest) ? child.modifiedAt : latest, ''),
-    });
+    let childMap = next;
+    let path = parentPath(childMap.path);
+    while (path) {
+      const parent = mapCacheRef.current.get(path);
+      if (!parent) return;
+      const children = parent.children.map(child => child.path === childMap.path
+        ? { ...child, bytes: childMap.bytes, files: childMap.files, modifiedAt: childMap.modifiedAt, sizeKnown: childMap.sizeKnown, sizeComplete: childMap.sizeComplete, sizeStale: false }
+        : child);
+      const measured = children.every(child => child.sizeComplete === true);
+      childMap = {
+        ...parent,
+        children,
+        bytes: children.reduce((sum, child) => sum + Number(child.bytes || 0), 0),
+        files: children.reduce((sum, child) => sum + Number(child.files || 0), 0),
+        measured,
+        sizeKnown: true,
+        sizeComplete: measured,
+        modifiedAt: children.reduce((latest, child) => !latest || Date.parse(child.modifiedAt || '') > Date.parse(latest) ? child.modifiedAt : latest, ''),
+      };
+      mapCacheRef.current.set(parent.path, childMap);
+      path = parentPath(childMap.path);
+    }
   };
 
   const reloadCurrentMap = async () => {
     if (!data || loading || refreshing || virtualStack.length) return;
     const request = ++loadRequestRef.current;
-    activeProgressRequestRef.current = '';
+    const progressRequestID = String(request);
+    activeProgressRequestRef.current = progressRequestID;
+    progressCountRef.current = 0;
     setRefreshing(true);
+    setScanning(true);
+    setProgress({ phase: 'folder-map', requestID: progressRequestID, filesScanned: 0, path: data.path });
     setError('');
     try {
-      const next = await reloadFolderMap(data.path);
+      const next = await refreshFolderMap(data.path, progressRequestID);
       if (request !== loadRequestRef.current) return;
       mapCacheRef.current.set(next.path, next);
       updateParentCache(next);
@@ -300,7 +310,12 @@ export default function App() {
     } catch (reason) {
       if (request === loadRequestRef.current) setError(String(reason));
     } finally {
-      setRefreshing(false);
+      if (request === loadRequestRef.current) {
+        activeProgressRequestRef.current = '';
+        setRefreshing(false);
+        setScanning(false);
+        setProgress(null);
+      }
     }
   };
 
