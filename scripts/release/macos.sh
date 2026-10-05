@@ -37,12 +37,14 @@ fi
 
 version="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync("wails.json", "utf8")).info.productVersion)')"
 app="$ROOT/build/bin/DiskAtlas.app"
+executable="$app/Contents/MacOS/diskatlas"
 entitlements="$ROOT/build/darwin/entitlements.plist"
 output="$ROOT/dist/release/macos/$channel"
 mkdir -p "$output"
 
 wails build -platform darwin/universal -clean
 [[ -d "$app" ]] || { echo "Wails did not produce $app" >&2; exit 1; }
+[[ -x "$executable" ]] || { echo "Wails did not produce the app executable at $executable" >&2; exit 1; }
 
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $DISKATLAS_BUNDLE_ID" "$app/Contents/Info.plist"
 if [[ "$channel" == "app-store" && -n "${MAC_PROVISIONING_PROFILE:-}" ]]; then

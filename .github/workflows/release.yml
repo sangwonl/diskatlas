@@ -1,0 +1,275 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify tag matches application versions
+        id: version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must use vMAJOR.MINOR.PATCH (received: $GITHUB_REF_NAME)." >&2
+            exit 1
+          fi
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const expected = process.argv[1];
+            const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
+            const productVersion = JSON.parse(readFileSync("wails.json", "utf8")).info.productVersion;
+            if (packageVersion !== expected || productVersion !== expected) {
+              console.error(`Tag ${expected} must match package.json (${packageVersion}) and wails.json (${productVersion}).`);
+              process.exit(1);
+            }
+          ' "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: validate-version
+    runs-on: macos-15
+    env:
+      DISKATLAS_BUNDLE_ID: ${{ vars.DISKATLAS_BUNDLE_ID }}
+      MAC_APP_IDENTITY: ${{ secrets.MAC_APP_IDENTITY }}
+      MAC_NOTARY_PROFILE: diskatlas-notary
+      MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      APPLE_NOTARY_API_KEY_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_BASE64 }}
+      APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+      APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Import Developer ID and notarization credentials
+        shell: bash
+        run: |
+          : "${DISKATLAS_BUNDLE_ID:?Set the DISKATLAS_BUNDLE_ID repository variable.}"
+          : "${MAC_APP_IDENTITY:?Set the MAC_APP_IDENTITY secret.}"
+          : "${MACOS_CERTIFICATE_BASE64:?Set the MACOS_CERTIFICATE_BASE64 secret.}"
+          : "${MACOS_CERTIFICATE_PASSWORD:?Set the MACOS_CERTIFICATE_PASSWORD secret.}"
+          : "${APPLE_NOTARY_API_KEY_BASE64:?Set the APPLE_NOTARY_API_KEY_BASE64 secret.}"
+          : "${APPLE_NOTARY_KEY_ID:?Set the APPLE_NOTARY_KEY_ID secret.}"
+          : "${APPLE_NOTARY_ISSUER_ID:?Set the APPLE_NOTARY_ISSUER_ID secret.}"
+
+          keychain_path="$RUNNER_TEMP/diskatlas-signing.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          security default-keychain -d user -s "$keychain_path"
+
+          certificate_path="$RUNNER_TEMP/developer-id.p12"
+          printf '%s' "$MACOS_CERTIFICATE_BASE64" | base64 --decode > "$certificate_path"
+          security import "$certificate_path" -k "$keychain_path" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+
+          api_key_path="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$APPLE_NOTARY_API_KEY_BASE64" | base64 --decode > "$api_key_path"
+          xcrun notarytool store-credentials "$MAC_NOTARY_PROFILE" \
+            --key "$api_key_path" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID"
+
+      - name: Install Wails CLI
+        shell: bash
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Build, sign, and notarize macOS artifacts
+        run: npm run release:mac:direct
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-release-assets
+          path: dist/release/macos/direct/*
+          if-no-files-found: error
+
+      - name: Remove signing material
+        if: always()
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/diskatlas-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/AuthKey.p8"
+
+  windows:
+    if: ${{ vars.ENABLE_WINDOWS_RELEASE == 'true' }}
+    needs: validate-version
+    runs-on: windows-2025
+    env:
+      WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+      WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Import Authenticode certificate
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_BASE64)) {
+            throw 'Set the WINDOWS_SIGNING_CERTIFICATE_BASE64 secret.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD)) {
+            throw 'Set the WINDOWS_SIGNING_CERTIFICATE_PASSWORD secret.'
+          }
+
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'diskatlas-signing.pfx'
+          $certificateBytes = [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64)
+          [IO.File]::WriteAllBytes($certificatePath, $certificateBytes)
+          $password = ConvertTo-SecureString $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          if ($null -eq $certificate) { throw 'Could not import the Authenticode certificate.' }
+          "WINDOWS_SIGN_THUMBPRINT=$($certificate.Thumbprint)" >> $env:GITHUB_ENV
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y --no-progress
+          }
+          $nsisDirectory = Join-Path ${env:ProgramFiles(x86)} 'NSIS'
+          if (Test-Path (Join-Path $nsisDirectory 'makensis.exe')) {
+            $nsisDirectory >> $env:GITHUB_PATH
+          }
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue) -and -not (Test-Path (Join-Path $nsisDirectory 'makensis.exe'))) {
+            throw 'NSIS installation did not provide makensis.exe.'
+          }
+
+      - name: Install Wails CLI
+        shell: pwsh
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+          "$(go env GOPATH)\bin" >> $env:GITHUB_PATH
+
+      - name: Build and sign Windows installer
+        shell: pwsh
+        run: npm run release:windows:direct -- -SignThumbprint $env:WINDOWS_SIGN_THUMBPRINT
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-release-assets
+          path: dist/release/windows/direct/*
+          if-no-files-found: error
+
+      - name: Remove signing material
+        if: always()
+        shell: pwsh
+        run: Remove-Item (Join-Path $env:RUNNER_TEMP 'diskatlas-signing.pfx') -Force -ErrorAction SilentlyContinue
+
+  publish:
+    needs: [validate-version, macos, windows]
+    if: ${{ always() && needs.validate-version.result == 'success' && needs.macos.result == 'success' && (needs.windows.result == 'success' || needs.windows.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: '*-release-assets'
+          path: dist/release
+          merge-multiple: true
+
+      - name: Create checksums
+        run: sha256sum dist/release/* > SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/release/* SHA256SUMS.txt --title "DiskAtlas ${{ needs.validate-version.outputs.version }}" --generate-notes --verify-tag
+
+  publish-homebrew-cask:
+    needs: [validate-version, macos, publish]
+    if: ${{ needs.publish.result == 'success' }}
+    runs-on: macos-15
+    permissions:
+      contents: read
+    env:
+      HOMEBREW_TAP_REPOSITORY: sangwonl/homebrew-tap
+      HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+      VERSION: ${{ needs.validate-version.outputs.version }}
+      SOURCE_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Validate Tap settings
+        shell: bash
+        run: |
+          : "${HOMEBREW_TAP_REPOSITORY:?Set the HOMEBREW_TAP_REPOSITORY repository variable.}"
+          : "${HOMEBREW_TAP_GITHUB_TOKEN:?Set the HOMEBREW_TAP_GITHUB_TOKEN secret with write access to the Tap repository.}"
+
+      - uses: actions/checkout@v7
+        with:
+          repository: sangwonl/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          path: homebrew-tap
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos-release-assets
+          path: macos-release
+
+      - name: Update DiskAtlas Cask
+        shell: bash
+        run: |
+          asset="macos-release/DiskAtlas-${VERSION}-macOS-universal.dmg"
+          [[ -f "$asset" ]] || { echo "Missing release asset: $asset" >&2; exit 1; }
+          sha256="$(shasum -a 256 "$asset" | awk '{print $1}')"
+          mkdir -p homebrew-tap/Casks
+          cat > homebrew-tap/Casks/diskatlas.rb <<EOF
+          cask "diskatlas" do
+            version "${VERSION}"
+            sha256 "${sha256}"
+
+            url "https://github.com/${SOURCE_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/DiskAtlas-${VERSION}-macOS-universal.dmg"
+            name "DiskAtlas"
+            desc "Interactive map for exploring disk usage"
+            homepage "https://github.com/${SOURCE_REPOSITORY}"
+
+            app "DiskAtlas.app"
+          end
+          EOF
+
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/diskatlas.rb
+          if ! git diff --cached --quiet; then
+            git commit -m "Update DiskAtlas to ${VERSION}"
+            git push
+          fi

@@ -62,3 +62,27 @@ For internal smoke builds only, omit public signing explicitly with `-Unsigned`.
 ## Credentials and release identity
 
 The scripts never generate or embed certificates, Apple credentials, Store identity, or signing secrets. Configure these from your developer accounts and Windows certificate store. Keep the bundle ID and Store identity stable between releases; changing either creates a different app identity.
+
+## GitHub Releases and Homebrew
+
+The GitHub Actions release workflow runs when a `vMAJOR.MINOR.PATCH` tag is pushed. It checks that the tag matches both `package.json` and `wails.json`, then publishes the signed and notarized macOS universal DMG and ZIP as GitHub Release assets. Windows is optional: set `ENABLE_WINDOWS_RELEASE` to `true` and configure its signing certificate secrets to include the installer.
+
+Set the following in the source repository's **Settings → Secrets and variables → Actions**:
+
+| Name | Type | Value |
+| --- | --- | --- |
+| `DISKATLAS_BUNDLE_ID` | Variable | Stable reverse-DNS bundle ID registered to your Apple developer account |
+| `MAC_APP_IDENTITY` | Secret | Exact Developer ID Application identity name |
+| `MACOS_CERTIFICATE_BASE64` | Secret | Base64-encoded `.p12` containing the Developer ID Application certificate and private key |
+| `MACOS_CERTIFICATE_PASSWORD` | Secret | Password for that `.p12` |
+| `APPLE_NOTARY_API_KEY_BASE64` | Secret | Base64-encoded App Store Connect API `.p8` key authorized for notarization |
+| `APPLE_NOTARY_KEY_ID` | Secret | App Store Connect API key ID |
+| `APPLE_NOTARY_ISSUER_ID` | Secret | App Store Connect issuer ID |
+| `HOMEBREW_TAP_GITHUB_TOKEN` | Secret | Fine-grained token with Contents read/write access to the Tap repository |
+| `ENABLE_WINDOWS_RELEASE` | Variable | Set to `true` to include Windows builds |
+| `WINDOWS_SIGNING_CERTIFICATE_BASE64` | Secret | Base64-encoded Authenticode `.pfx` |
+| `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` | Secret | Password for that `.pfx` |
+
+The Tap is the separate `sangwonl/homebrew-tap` GitHub repository, not a `homebrew-tap` subdirectory inside this source repository. After a successful GitHub Release, the workflow updates `Casks/diskatlas.rb` in that Tap with the DMG URL and SHA-256. Users install it with `brew install --cask sangwonl/tap/diskatlas`. A single Tap can provide multiple apps by keeping one cask file per app in its `Casks/` directory.
+
+For each release, update the versions in `package.json` and `wails.json`, commit the change, and push the matching tag. The Store packaging scripts and signing settings remain separate and available for later use.
