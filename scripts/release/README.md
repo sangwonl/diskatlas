@@ -57,7 +57,7 @@ Use an Authenticode certificate whose private key is installed in the Windows ce
 npm run release:windows:direct -- -SignThumbprint 'CERTIFICATE_SHA1_THUMBPRINT'
 ```
 
-For internal smoke builds only, omit public signing explicitly with `-Unsigned`. ARM64 can be selected with `-Architecture arm64`.
+To build without a certificate, pass `-Unsigned`. Unsigned installers can show prominent SmartScreen warnings or be blocked by managed PCs. ARM64 can be selected with `-Architecture arm64`.
 
 ## Credentials and release identity
 
@@ -65,7 +65,7 @@ The scripts never generate or embed certificates, Apple credentials, Store ident
 
 ## GitHub Releases and Homebrew
 
-The GitHub Actions release workflow runs when a `vMAJOR.MINOR.PATCH` tag is pushed. It checks that the tag matches both `package.json` and `wails.json`, then publishes the signed and notarized macOS universal DMG and ZIP as GitHub Release assets. Windows is optional: set `ENABLE_WINDOWS_RELEASE` to `true` and configure its signing certificate secrets to include the installer.
+The GitHub Actions release workflow runs when a `vMAJOR.MINOR.PATCH` tag is pushed. It checks that the tag matches both `package.json` and `wails.json`, then publishes the signed and notarized macOS universal DMG and ZIP as GitHub Release assets. Windows is optional: set `ENABLE_WINDOWS_RELEASE` to `true`. If both Windows signing secrets are configured, the installer is signed; if neither is configured, Actions builds and publishes it unsigned. Unsigned downloads can show prominent SmartScreen warnings or be blocked by managed PCs.
 
 Set the following in the source repository's **Settings → Secrets and variables → Actions**:
 
@@ -80,8 +80,8 @@ Set the following in the source repository's **Settings → Secrets and variable
 | `APPLE_NOTARY_ISSUER_ID` | Secret | App Store Connect issuer ID |
 | `HOMEBREW_TAP_GITHUB_TOKEN` | Secret | Fine-grained token with Contents read/write access to the Tap repository |
 | `ENABLE_WINDOWS_RELEASE` | Variable | Set to `true` to include Windows builds |
-| `WINDOWS_SIGNING_CERTIFICATE_BASE64` | Secret | Base64-encoded Authenticode `.pfx` |
-| `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` | Secret | Password for that `.pfx` |
+| `WINDOWS_SIGNING_CERTIFICATE_BASE64` | Secret | Optional base64-encoded Authenticode `.pfx`; leave both Windows signing secrets unset for an unsigned build |
+| `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` | Secret | Optional password for that `.pfx`; configure it together with the certificate |
 
 The Tap is the separate `sangwonl/homebrew-tap` GitHub repository, not a `homebrew-tap` subdirectory inside this source repository. After a successful GitHub Release, the workflow updates `Casks/diskatlas.rb` in that Tap with the DMG URL and SHA-256. Users install it with `brew install --cask sangwonl/tap/diskatlas`. A single Tap can provide multiple apps by keeping one cask file per app in its `Casks/` directory.
 

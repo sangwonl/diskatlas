@@ -141,16 +141,23 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Import Authenticode certificate
+      - name: Check Windows signing configuration
+        id: windows-signing
         shell: pwsh
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_BASE64)) {
-            throw 'Set the WINDOWS_SIGNING_CERTIFICATE_BASE64 secret.'
+          $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_BASE64)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD)
+          if ($hasCertificate -xor $hasPassword) {
+            throw 'Configure both Windows signing secrets or leave both empty to build unsigned.'
           }
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD)) {
-            throw 'Set the WINDOWS_SIGNING_CERTIFICATE_PASSWORD secret.'
-          }
+          $enabled = if ($hasCertificate) { 'true' } else { 'false' }
+          "enabled=$enabled" >> $env:GITHUB_OUTPUT
+          if (-not $hasCertificate) { Write-Host 'No Authenticode certificate configured; the Windows installer will be unsigned.' }
 
+      - name: Import Authenticode certificate
+        if: ${{ steps.windows-signing.outputs.enabled == 'true' }}
+        shell: pwsh
+        run: |
           $certificatePath = Join-Path $env:RUNNER_TEMP 'diskatlas-signing.pfx'
           $certificateBytes = [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64)
           [IO.File]::WriteAllBytes($certificatePath, $certificateBytes)
@@ -180,8 +187,14 @@ jobs:
           "$(go env GOPATH)\bin" >> $env:GITHUB_PATH
 
       - name: Build and sign Windows installer
+        if: ${{ steps.windows-signing.outputs.enabled == 'true' }}
         shell: pwsh
         run: npm run release:windows:direct -- -SignThumbprint $env:WINDOWS_SIGN_THUMBPRINT
+
+      - name: Build unsigned Windows installer
+        if: ${{ steps.windows-signing.outputs.enabled == 'false' }}
+        shell: pwsh
+        run: npm run release:windows:direct -- -Unsigned
 
       - uses: actions/upload-artifact@v7
         with:
