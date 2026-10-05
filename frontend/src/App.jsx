@@ -1,6 +1,6 @@
 import React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { folderMap, measureFolderMap, onScanProgress, refreshFolderMap, reloadFolderMap, revealPath, storageInfo } from './lib/api';
+import { chooseScanRoot, folderMap, getScanRoot, measureFolderMap, onScanProgress, refreshFolderMap, reloadFolderMap, revealPath, storageInfo } from './lib/api';
 import { layoutTreemap } from './lib/treemap';
 
 const DAY = 86_400_000;
@@ -43,9 +43,59 @@ function sizeLabel(item) {
 }
 
 function pathParts(path) {
-  if (!path || path === '/') return [{ label: '/', path: '/' }];
-  const parts = path.split('/').filter(Boolean);
-  return [{ label: '/', path: '/' }, ...parts.map((label, index) => ({ label, path: `/${parts.slice(0, index + 1).join('/')}` }))];
+  if (!path) return [];
+  const normalized = path.replace(/\\/g, '/');
+  const drive = normalized.match(/^([A-Za-z]:)(?:\/|$)/)?.[1];
+  const unc = normalized.startsWith('//');
+  const separator = path.includes('\\') ? '\\' : '/';
+  let rootPath = '/';
+  let rootLabel = '/';
+  let remainder = normalized.replace(/^\/+/, '');
+  if (drive) {
+    rootPath = `${drive}${separator}`;
+    rootLabel = drive;
+    remainder = normalized.slice(3);
+  } else if (unc) {
+    const segments = normalized.slice(2).split('/').filter(Boolean);
+    const server = segments.shift();
+    const share = segments.shift();
+    rootLabel = `\\\\${server || ''}${share ? `\\${share}` : ''}`;
+    rootPath = rootLabel;
+    remainder = segments.join('/');
+  }
+  const parts = remainder.split('/').filter(Boolean);
+  return [
+    { label: rootLabel, path: rootPath },
+    ...parts.map((label, index) => ({ label, path: `${rootPath.replace(/[\\/]$/, '')}${separator}${parts.slice(0, index + 1).join(separator)}` })),
+  ];
+}
+
+function parentPath(path) {
+  if (!path) return '';
+  const normalized = path.replace(/\\/g, '/').replace(/\/$/, '');
+  const drive = normalized.match(/^([A-Za-z]:)(?:\/|$)/)?.[1];
+  const separator = path.includes('\\') ? '\\' : '/';
+  if (!normalized || normalized === '/') return '';
+  if (drive && normalized.length <= 3) return '';
+  const index = normalized.lastIndexOf('/');
+  if (index < 0) return '';
+  let parent = normalized.slice(0, index);
+  if (drive && index <= 2) parent = `${drive}/`;
+  if (!parent) parent = '/';
+  return parent.replace(/\//g, separator);
+}
+
+function pathKey(path) {
+  const normalized = String(path || '').replace(/\\/g, '/').replace(/\/$/, '') || '/';
+  return /^[A-Za-z]:/.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+function scopedPathParts(path, scopeRoot) {
+  const parts = pathParts(path);
+  if (!scopeRoot) return parts;
+  const rootKey = pathKey(scopeRoot);
+  const rootIndex = parts.findIndex(part => pathKey(part.path) === rootKey);
+  return rootIndex < 0 ? parts : parts.slice(rootIndex);
 }
 
 function layoutEntries(data) {
@@ -195,6 +245,7 @@ export default function App() {
   const initializedRef = useRef(false);
   const [data, setData] = useState(null);
   const [storage, setStorage] = useState(null);
+  const [scanRoot, setScanRoot] = useState('');
   const [history, setHistory] = useState([]);
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -204,6 +255,7 @@ export default function App() {
   const [hovered, setHovered] = useState(null);
   const [virtualStack, setVirtualStack] = useState([]);
   const [error, setError] = useState('');
+  const [choosingRoot, setChoosingRoot] = useState(false);
 
   const acceptMap = next => {
     currentPathRef.current = next.path;
@@ -212,15 +264,13 @@ export default function App() {
   };
 
   const updateParentCache = next => {
-    const parentPath = next.path.slice(0, next.path.lastIndexOf('/')) || '/';
-    if (parentPath === next.path) return;
-    const parent = mapCacheRef.current.get(parentPath);
+    const parent = mapCacheRef.current.get(parentPath(next.path));
     if (!parent) return;
     const children = parent.children.map(child => child.path === next.path
       ? { ...child, bytes: next.bytes, files: next.files, modifiedAt: next.modifiedAt, sizeKnown: next.sizeKnown, sizeComplete: next.sizeComplete }
       : child);
     const measured = children.every(child => child.sizeComplete === true);
-    mapCacheRef.current.set(parentPath, {
+    mapCacheRef.current.set(parent.path, {
       ...parent,
       children,
       bytes: children.reduce((sum, child) => sum + Number(child.bytes || 0), 0),
@@ -255,7 +305,7 @@ export default function App() {
   };
 
   const loadMap = async (path = '', remember = false, force = false, measure = false) => {
-    const key = path || data?.root || currentPathRef.current || '/';
+    const key = path || data?.root || currentPathRef.current || scanRoot || '/';
     const cached = mapCacheRef.current.get(key);
     if (cached && !force && hasMeasuredFolderMap(cached) && (!measure || cached.sizeKnown !== false)) {
       loadRequestRef.current += 1;
@@ -334,7 +384,6 @@ export default function App() {
   };
 
   useEffect(() => {
-    storageInfo().then(setStorage).catch(() => {});
     const cancel = onScanProgress(nextProgress => {
       if (nextProgress.phase === 'folder-map' && nextProgress.requestID === activeProgressRequestRef.current) {
         const count = Math.max(progressCountRef.current, Number(nextProgress.filesScanned || 0));
@@ -347,16 +396,49 @@ export default function App() {
     if (!initializedRef.current) {
       initializedRef.current = true;
       const initialize = async () => {
-        const rootMap = await loadMap('', false, true, false);
-        if (rootMap && !rootMap.generatedAt) {
-          await new Promise(resolve => requestAnimationFrame(resolve));
-          await loadMap(rootMap.path, false, false, true);
+        try {
+          const root = await getScanRoot();
+          setScanRoot(root || '');
+          if (!root) {
+            setLoading(false);
+            return;
+          }
+          storageInfo().then(setStorage).catch(() => {});
+          const rootMap = await loadMap(root, false, true, false);
+          if (rootMap && !rootMap.generatedAt) {
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            await loadMap(rootMap.path, false, false, true);
+          }
+        } catch (reason) {
+          setError(String(reason));
+          setLoading(false);
         }
       };
       initialize();
     }
     return typeof cancel === 'function' ? cancel : undefined;
   }, []);
+
+  const selectScanRoot = async () => {
+    if (choosingRoot) return;
+    setChoosingRoot(true);
+    setError('');
+    try {
+      const root = await chooseScanRoot();
+      if (!root || root === scanRoot) return;
+      setScanRoot(root);
+      setHistory([]);
+      setVirtualStack([]);
+      setSelected(null);
+      setHovered(null);
+      storageInfo().then(setStorage).catch(() => {});
+      await loadMap(root, false, true, false);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setChoosingRoot(false);
+    }
+  };
 
   const goBack = async () => {
     if (virtualStack.length) {
@@ -393,7 +475,7 @@ export default function App() {
 
   const jumpTo = async path => {
     if (path === data?.path) return;
-    const currentParts = pathParts(data?.path).map(part => part.path);
+    const currentParts = scopedPathParts(data?.path, scanRoot).map(part => part.path);
     const index = currentParts.indexOf(path);
     if (index >= 0) {
       setHistory(currentParts.slice(0, index));
@@ -415,14 +497,14 @@ export default function App() {
   const partialFolders = viewData?.children?.filter(child => child.directory && child.sizeKnown !== false && child.sizeComplete === false && !child.sizeStale && Number(child.bytes || 0) > 0).length || 0;
   const visibleItems = layoutEntries(viewData).length;
   const breadcrumbItems = data ? [
-    ...pathParts(data.path),
+    ...scopedPathParts(data.path, scanRoot),
     ...virtualStack.map((entry, index) => ({ label: entry.group.name, virtualIndex: index, path: `virtual:${index}` })),
   ] : [];
 
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand">Shed</div>
+        <div className="brand">DiskAtlas</div>
         <nav className="breadcrumbs" aria-label="현재 경로">
           <button className="back" onClick={goBack} disabled={!history.length && !virtualStack.length} aria-label="뒤로">‹</button>
           {breadcrumbItems.map((part, index, all) => (
@@ -434,6 +516,7 @@ export default function App() {
         </nav>
         <div className="disk-summary">
           {storage && <span>{bytes(storage.available)} 여유 <small>{bytes(used)} 사용</small></span>}
+          <button className="scope-button" onClick={selectScanRoot} disabled={choosingRoot || loading} title="분석할 폴더 선택">{choosingRoot ? '선택 중…' : '폴더 선택'}</button>
           <button className={`refresh-button${refreshing ? ' refreshing' : ''}`} onClick={reloadCurrentMap} disabled={loading || refreshing || !data || virtualStack.length > 0} aria-label="현재 폴더 새로고침" title="현재 폴더 새로고침">
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16.4 8A6.7 6.7 0 0 0 4.6 5.5L3 7.1M3.2 3.7v3.6h3.6M3.6 12a6.7 6.7 0 0 0 11.8 2.5l1.6-1.6m-.2 3.4v-3.6h-3.6" /></svg>
           </button>
@@ -459,7 +542,7 @@ export default function App() {
         <section className={`map-stage ${loading ? 'loading' : ''}`}>
           {viewData && <Treemap data={viewData} selected={selected} onSelect={setSelected} onHover={setHovered} onPrefetch={prefetchMap} onOpen={openCell} />}
           {hovered && <div className="map-hover-card" role="status"><strong>{hovered.name}</strong><span>{sizeLabel(hovered)} · {modifiedLabel(hovered.modifiedAt)}</span><small>{hovered.virtual ? `${hovered.groupedCount}개 합산 · 가상 폴더` : hovered.path}</small>{hovered.sizeStale && <em>저장된 측정값입니다. 상단에서 다시 계산할 수 있습니다.</em>}{hovered.directory && hovered.sizeComplete === false && !hovered.sizeStale && <em>일부 경로 또는 다른 볼륨을 제외한 최소 용량입니다</em>}{hovered.directory && <em>더블 클릭하여 열기</em>}</div>}
-          {!data && !loading && <div className="first-run"><strong>디스크 맵이 없습니다.</strong><span>폴더를 읽을 수 없습니다.</span></div>}
+          {!data && !loading && <div className="first-run"><strong>분석할 위치를 선택하세요</strong><span>선택한 폴더와 하위 폴더의 용량 지도를 엽니다.</span><button onClick={selectScanRoot} disabled={choosingRoot}>{choosingRoot ? '선택 중…' : '폴더 선택'}</button></div>}
           {loading && <div className="map-loading" role="status" aria-live="polite"><span className="loading-spinner" /><span>{loadingText}</span>{scanning && progress?.path && <small>{progress.path}</small>}</div>}
         </section>
 
@@ -467,7 +550,7 @@ export default function App() {
           <div className="scan-status">
             {scanning ? <><span className="pulse" /> 폴더 크기 계산 중</> : viewData ? `${visibleItems.toLocaleString()}개 항목${staleFolders ? ` · ${staleFolders}개 저장된 측정값` : ''}${partialFolders ? ` · ${partialFolders}개 일부 확인` : ''}${unmeasuredFolders ? ` · ${unmeasuredFolders}개 폴더 용량 미확인` : ''}` : null}
           </div>
-          {selected && <div className="selection"><strong>{selected.virtual ? selected.name : selected.path}</strong><span>{sizeLabel(selected)} · {modifiedLabel(selected.modifiedAt)}</span>{selected.directory && <button onClick={() => openCell(selected)}>열기</button>}{!selected.virtual && <button onClick={() => revealPath(selected.path)}>Finder</button>}</div>}
+          {selected && <div className="selection"><strong>{selected.virtual ? selected.name : selected.path}</strong><span>{sizeLabel(selected)} · {modifiedLabel(selected.modifiedAt)}</span>{selected.directory && <button onClick={() => openCell(selected)}>열기</button>}{!selected.virtual && <button onClick={() => revealPath(selected.path)}>위치</button>}</div>}
         </footer>
         {error && <div className="error" role="alert">{error}</div>}
       </main>

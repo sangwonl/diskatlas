@@ -1,7 +1,9 @@
-import { FolderMap, MeasureFolderMap, RefreshFolderMap, ReloadFolderMap, RevealPath, StorageInfo } from '../../wailsjs/go/main/App';
+import { ChooseScanRoot, FolderMap, MeasureFolderMap, RefreshFolderMap, ReloadFolderMap, RevealPath, ScanRoot, StorageInfo } from '../../wailsjs/go/main/App';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
 
 export const storageInfo = () => StorageInfo();
+export const getScanRoot = () => ScanRoot();
+export const chooseScanRoot = () => ChooseScanRoot();
 export const revealPath = path => RevealPath(path);
 export const folderMap = path => FolderMap(path || '');
 export const reloadFolderMap = path => ReloadFolderMap(path || '');

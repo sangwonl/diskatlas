@@ -552,7 +552,7 @@ func inspectCandidate(candidate scanCandidate, seen *sync.Map, onFile func(strin
 		}
 	}
 	if tier == Protected {
-		explanation = "Protected by Shed safety rules and cannot be selected."
+		explanation = "Protected by DiskAtlas safety rules and cannot be selected."
 	}
 	labels := mergeLabels(candidate.labels, classifyPath(target))
 	name := rule.Name

@@ -26,7 +26,14 @@ func StorageInfo() (Storage, error) {
 	if err != nil {
 		return Storage{}, err
 	}
-	return storageInfoAt(home)
+	return StorageInfoAt(home)
+}
+
+func StorageInfoAt(path string) (Storage, error) {
+	if strings.TrimSpace(path) == "" {
+		return StorageInfo()
+	}
+	return storageInfoAt(path)
 }
 
 func storageInfoAt(path string) (Storage, error) {

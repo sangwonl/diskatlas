@@ -1,17 +1,21 @@
 {
-  "name": "shed",
+  "name": "diskatlas",
   "version": "0.1.0",
   "private": true,
-  "description": "A safety-first disk reclaim tool for developer artifacts.",
+  "description": "An interactive map for exploring disk usage.",
   "type": "module",
   "bin": {
-    "shed": "./bin/shed.mjs"
+    "diskatlas": "./bin/diskatlas.mjs"
   },
   "scripts": {
-    "scan": "node ./bin/shed.mjs scan",
-    "gui": "node ./bin/shed.mjs gui",
-    "start": "node ./bin/shed.mjs gui",
+    "scan": "node ./bin/diskatlas.mjs scan",
+    "gui": "node ./bin/diskatlas.mjs gui",
+    "start": "node ./bin/diskatlas.mjs gui",
     "wails:dev": "wails dev",
-    "wails:build": "wails build"
+    "wails:build": "wails build",
+    "release:mac:store": "bash scripts/release/macos.sh app-store",
+    "release:mac:direct": "bash scripts/release/macos.sh direct",
+    "release:windows:store": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/release/windows.ps1 -Channel Store",
+    "release:windows:direct": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/release/windows.ps1 -Channel Direct"
   }
 }

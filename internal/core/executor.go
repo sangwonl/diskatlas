@@ -217,7 +217,7 @@ func validateCleanupItem(scan *Result, item Item, acknowledgeRisk bool) string {
 		return "Path could not be normalized safely"
 	}
 	if item.Action != "command" && (item.Tier == Protected || isProtected(clean)) {
-		return "Protected paths cannot be cleaned by Shed"
+		return "Protected paths cannot be cleaned by DiskAtlas"
 	}
 	if (item.Tier == Caution || item.Tier == Review) && !acknowledgeRisk {
 		return "Caution and review items require explicit risk acknowledgement"

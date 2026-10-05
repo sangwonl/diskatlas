@@ -140,7 +140,7 @@ function itemFrom(rule, targetPath, projectPath, size, hasLockfile = false) {
   let modifiedAt = null;
   try { modifiedAt = new Date(fsSync.statSync(targetPath).mtimeMs).toISOString(); } catch { modifiedAt = null; }
   const why = classification.tier === 'protected'
-    ? 'Protected by Shed safety rules and cannot be selected.'
+    ? 'Protected by DiskAtlas safety rules and cannot be selected.'
     : classification.tier === 'review'
       ? `${rule.name} includes user-managed or Git-tracked data. Review the contents before moving it to quarantine.`
     : `${rule.name} can be recreated with ${rule.rebuild}. ${classification.signals.join('; ') || 'Matched a known developer artifact rule.'}`;

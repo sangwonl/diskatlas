@@ -24,6 +24,9 @@ button { font: inherit; }
 .breadcrumbs i { opacity: .35; font-style: normal; }
 .disk-summary { display: flex; align-items: center; gap: 9px; color: #d4dce2; font-size: 13px; }
 .disk-summary small { margin-left: 7px; color: var(--muted); }
+.scope-button { height: 31px; padding: 0 10px; color: #d4dce2; background: rgba(255,255,255,.035); border: 1px solid var(--line); border-radius: 7px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.scope-button:hover:not(:disabled) { background: rgba(255,255,255,.09); }
+.scope-button:disabled { opacity: .55; cursor: default; }
 .first-run button { padding: 7px 13px; color: #0a1115; font-weight: 700; background: #e9f4fa; border: 0; border-radius: 7px; cursor: pointer; }
 .refresh-button { display: grid; width: 31px; height: 31px; padding: 6px; place-items: center; color: #d4dce2; background: transparent; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; }
 .refresh-button:hover:not(:disabled) { background: rgba(255,255,255,.07); }

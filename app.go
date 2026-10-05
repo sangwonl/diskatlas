@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"safeshed/internal/core"
+	"diskatlas/internal/core"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -19,33 +19,139 @@ import (
 type App struct {
 	ctx         context.Context
 	mu          sync.RWMutex
+	rootMu      sync.RWMutex
 	lastScan    *core.Result
 	defaultRoot string
+	rootError   error
+	startupDone chan struct{}
 }
 
 // NewApp creates a new App application struct
 func NewApp() *App {
-	return NewAppWithRoot(string(os.PathSeparator))
+	return NewAppWithRoot("")
 }
 
 func NewAppWithRoot(root string) *App {
-	if strings.TrimSpace(root) == "" {
-		root = string(os.PathSeparator)
-	}
-	return &App{defaultRoot: root}
+	return &App{defaultRoot: expandScanRoot(root), startupDone: make(chan struct{})}
 }
 
 func (a *App) effectiveRoot(root string) string {
 	if strings.TrimSpace(root) == "" {
-		return a.defaultRoot
+		return a.scanRoot()
 	}
-	return root
+	return expandScanRoot(root)
+}
+
+func (a *App) scanRoot() string {
+	a.rootMu.RLock()
+	defer a.rootMu.RUnlock()
+	return a.defaultRoot
 }
 
 // startup is called when the app starts. The context is saved
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
+	if a.startupDone != nil {
+		defer close(a.startupDone)
+	}
 	a.ctx = ctx
+	if a.scanRoot() != "" {
+		return
+	}
+
+	settings, err := readScanScope()
+	if err != nil {
+		a.setRootError(err)
+		return
+	}
+	if settings.Path == "" {
+		return
+	}
+
+	root := settings.Path
+	if settings.Bookmark != "" {
+		resolved, renewedBookmark, err := startFolderScope(settings.Bookmark)
+		if err != nil {
+			a.setRootError(err)
+			return
+		}
+		if resolved != "" {
+			root = resolved
+		}
+		if renewedBookmark != "" && renewedBookmark != settings.Bookmark {
+			settings.Bookmark = renewedBookmark
+			settings.Path = root
+			_ = writeScanScope(settings)
+		}
+	}
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		if err == nil {
+			err = errors.New("saved scan location is not a directory")
+		}
+		a.setRootError(err)
+		return
+	}
+	a.rootMu.Lock()
+	a.defaultRoot = root
+	a.rootMu.Unlock()
+}
+
+func (a *App) shutdown(context.Context) {
+	stopFolderScope()
+}
+
+func (a *App) setRootError(err error) {
+	a.rootMu.Lock()
+	a.rootError = err
+	a.rootMu.Unlock()
+}
+
+// ScanRoot returns the remembered scan location, if one is available.
+func (a *App) ScanRoot() (string, error) {
+	if a.startupDone != nil {
+		<-a.startupDone
+	}
+	a.rootMu.RLock()
+	defer a.rootMu.RUnlock()
+	if a.rootError != nil {
+		return a.defaultRoot, a.rootError
+	}
+	return a.defaultRoot, nil
+}
+
+// ChooseScanRoot asks the user to pick a folder and remembers that scope.
+func (a *App) ChooseScanRoot() (string, error) {
+	if a.startupDone != nil {
+		<-a.startupDone
+	}
+	initial := a.scanRoot()
+	if initial == "" {
+		initial, _ = os.UserHomeDir()
+	}
+	path, bookmark, err := chooseFolder(a.ctx, initial)
+	if err != nil || path == "" {
+		return path, err
+	}
+	path = expandScanRoot(path)
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(absolute)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", errors.New("selected scan location is not a directory")
+	}
+	if err := writeScanScope(scanScopeSettings{Path: absolute, Bookmark: bookmark}); err != nil {
+		return "", err
+	}
+	a.rootMu.Lock()
+	a.defaultRoot = absolute
+	a.rootError = nil
+	a.rootMu.Unlock()
+	return absolute, nil
 }
 
 func (a *App) Scan(root string) (*core.Result, error) {
@@ -93,12 +199,12 @@ func (a *App) CachedAnalysis(root string) (*core.Analysis, error) {
 
 // FolderMap reads only one directory level without descending into folders.
 func (a *App) FolderMap(path string) (*core.FolderMap, error) {
-	return core.ReadFolderMap(a.defaultRoot, path)
+	return core.ReadFolderMap(a.scanRoot(), path)
 }
 
 // ReloadFolderMap rereads the current directory level and reuses indexed child sizes.
 func (a *App) ReloadFolderMap(path string) (*core.FolderMap, error) {
-	return core.ReloadFolderMap(a.defaultRoot, path)
+	return core.ReloadFolderMap(a.scanRoot(), path)
 }
 
 // MeasureFolderMap recursively measures the opened folder's immediate children.
@@ -112,7 +218,7 @@ func (a *App) RefreshFolderMap(path, requestID string) (*core.FolderMap, error) 
 }
 
 func (a *App) measureFolderMap(path, requestID string, refresh bool) (*core.FolderMap, error) {
-	return core.MeasureFolderMap(a.defaultRoot, path, refresh, func(progress core.Progress) {
+	return core.MeasureFolderMap(a.scanRoot(), path, refresh, func(progress core.Progress) {
 		if a.ctx != nil {
 			progress.RequestID = requestID
 			wailsruntime.EventsEmit(a.ctx, "scan:progress", progress)
@@ -125,7 +231,11 @@ func (a *App) Rules() []core.Rule {
 }
 
 func (a *App) StorageInfo() (core.Storage, error) {
-	return core.StorageInfo()
+	root := a.scanRoot()
+	if root == "" {
+		return core.StorageInfo()
+	}
+	return core.StorageInfoAt(root)
 }
 
 func (a *App) ScanStorage() (core.Storage, error) {

@@ -10,6 +10,10 @@ export function CachedAnalysis(arg1) {
   return window['go']['main']['App']['CachedAnalysis'](arg1);
 }
 
+export function ChooseScanRoot() {
+  return window['go']['main']['App']['ChooseScanRoot']();
+}
+
 export function ExecuteCleanup(arg1) {
   return window['go']['main']['App']['ExecuteCleanup'](arg1);
 }
@@ -44,6 +48,10 @@ export function Rules() {
 
 export function Scan(arg1) {
   return window['go']['main']['App']['Scan'](arg1);
+}
+
+export function ScanRoot() {
+  return window['go']['main']['App']['ScanRoot']();
 }
 
 export function ScanStorage() {

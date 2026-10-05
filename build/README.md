@@ -8,6 +8,8 @@ The structure is:
 * darwin - macOS specific files
 * windows - Windows specific files
 
+`appicon.svg` is the DiskAtlas icon source. `appicon.png` is used by Wails; `windows/icon.ico` is generated from the same PNG for Windows.
+
 ## Mac
 
 The `darwin` directory holds files specific to Mac builds.
@@ -19,6 +21,7 @@ The directory contains the following files:
 
 - `Info.plist` - the main plist file used for Mac builds. It is used when building using `wails build`.
 - `Info.dev.plist` - same as the main plist file but used when building using `wails dev`.
+- `entitlements.plist` - App Sandbox and persistent user-selected folder access required for a Mac App Store build. Wails does not apply this file automatically; the App Store signing step must use it.
 
 ## Windows
 
@@ -33,3 +36,8 @@ build with `wails build`.
 - `info.json` - Application details used for Windows builds. The data here will be used by the Windows installer,
   as well as the application itself (right click the exe -> properties -> details)
 - `wails.exe.manifest` - The main application manifest file.
+
+## Release builds
+
+Release scripts and signing requirements are documented in [`scripts/release/README.md`](../scripts/release/README.md).
+Run Windows builds on Windows and macOS builds on macOS; Wails does not cross-compile these desktop bundles.

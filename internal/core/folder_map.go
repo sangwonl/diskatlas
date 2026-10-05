@@ -78,7 +78,7 @@ type folderMapIndexStore struct {
 var folderMapIndexStores sync.Map
 
 // ReadFolderMap reads only the immediate entries in target. It does not walk
-// into child directories, so opening Shed is fast even on a large volume.
+// into child directories, so opening DiskAtlas is fast even on a large volume.
 func ReadFolderMap(root, target string) (*FolderMap, error) {
 	normalizedRoot, normalizedTarget, err := normalizeFolderMapPaths(root, target)
 	if err != nil {

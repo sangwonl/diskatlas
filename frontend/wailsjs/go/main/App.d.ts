@@ -6,6 +6,8 @@ export function Analyze(arg1:string):Promise<core.Analysis>;
 
 export function CachedAnalysis(arg1:string):Promise<core.Analysis>;
 
+export function ChooseScanRoot():Promise<string>;
+
 export function ExecuteCleanup(arg1:core.CleanupRequest):Promise<core.CleanupResult>;
 
 export function FolderMap(arg1:string):Promise<core.FolderMap>;
@@ -23,6 +25,8 @@ export function RevealPath(arg1:string):Promise<void>;
 export function Rules():Promise<Array<core.Rule>>;
 
 export function Scan(arg1:string):Promise<core.Result>;
+
+export function ScanRoot():Promise<string>;
 
 export function ScanStorage():Promise<core.Storage>;
 

@@ -1,4 +1,4 @@
-module safeshed
+module diskatlas
 
 go 1.25.0
 

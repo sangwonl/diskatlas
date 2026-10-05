@@ -47,7 +47,7 @@ export function startServer({ port = 4173, open = true } = {}) {
   });
   server.listen(port, '127.0.0.1', () => {
     const address = `http://127.0.0.1:${port}`;
-    console.log(`Shed GUI: ${address}`);
+    console.log(`DiskAtlas GUI: ${address}`);
     if (open) import('node:child_process').then(({ exec }) => exec(`open ${address}`));
   });
   return server;

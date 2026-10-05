@@ -19,7 +19,7 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:  "Shed",
+		Title:  "DiskAtlas",
 		Width:  1024,
 		Height: 768,
 		AssetServer: &assetserver.Options{
@@ -27,6 +27,7 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 245, G: 245, B: 247, A: 1},
 		OnStartup:        app.startup,
+		OnShutdown:       app.shutdown,
 		Bind: []interface{}{
 			app,
 		},
@@ -39,9 +40,8 @@ func main() {
 
 // scanRootFromArgs reads arguments forwarded by `wails dev -appargs ...`.
 // A positional directory is accepted for quick fixture runs, while the
-// named form is clearer in scripts: --root /tmp/shed-fixture.
+// named form is clearer in scripts: --root /tmp/diskatlas-fixture.
 func scanRootFromArgs(args []string) string {
-	root := string(os.PathSeparator)
 	positional := ""
 	for index := 0; index < len(args); index++ {
 		argument := strings.TrimSpace(args[index])
@@ -68,5 +68,5 @@ func scanRootFromArgs(args []string) string {
 	if positional != "" {
 		return positional
 	}
-	return root
+	return ""
 }

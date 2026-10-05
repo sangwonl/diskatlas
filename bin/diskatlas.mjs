@@ -89,7 +89,7 @@ function printSummary(result) {
   result.items.filter((item) => item.tier !== 'protected').slice(0, 10).forEach((item) => {
     console.log(`  ${tierIcon(item.tier)} ${formatBytes(item.bytes).padStart(10)}  ${item.name}  ${item.path}`);
   });
-  console.log('\nNext: shed report --json or shed plan');
+  console.log('\nNext: diskatlas report --json or diskatlas plan');
 }
 
 async function run() {
@@ -110,7 +110,7 @@ async function run() {
     return;
   }
   const result = await loadScan();
-  if (!result) { console.error('No scan found. Run `shed scan` first.'); process.exitCode = 1; return; }
+  if (!result) { console.error('No scan found. Run `diskatlas scan` first.'); process.exitCode = 1; return; }
   if (command === 'report') {
     const items = filterItems(result.items);
     if (flag('--json')) printJson(items); else items.forEach((item) => console.log(`${tierIcon(item.tier)} ${formatBytes(item.bytes).padStart(10)} ${item.name}\n   ${item.path}`));
@@ -124,8 +124,8 @@ async function run() {
       console.log(`${tierIcon(item.tier)} ${item.tier} · ${item.ruleId} · ${formatBytes(item.bytes)} · ${item.path}`);
       console.log(`\nWhy\n  ${item.explanation}`);
       console.log(`\nHow to rebuild\n  ${item.rebuild}  (cost: ${item.cost})`);
-      if (item.native) console.log(`\nNative cleanup guide\n  ${item.native}\n  Shed does not execute native cleanup commands automatically.`);
-      console.log(`\nHow Shed handles it\n  ${item.clean === 'blocked' ? 'Protected: selection is blocked.' : 'Moves it to a local quarantine; no permanent delete is performed.'}`);
+      if (item.native) console.log(`\nNative cleanup guide\n  ${item.native}\n  DiskAtlas does not execute native cleanup commands automatically.`);
+      console.log(`\nHow DiskAtlas handles it\n  ${item.clean === 'blocked' ? 'Protected: selection is blocked.' : 'Moves it to a local quarantine; no permanent delete is performed.'}`);
     }
     return;
   }
@@ -199,7 +199,7 @@ async function run() {
     const subcommand = args[1] || 'list';
     const root = path.join(stateDir, 'quarantine');
     if (subcommand === 'purge') {
-      if (!flag('--yes')) { console.error('Purge removes only Shed quarantine data. Re-run with `quarantine purge --yes` after reviewing the list.'); process.exitCode = 2; return; }
+      if (!flag('--yes')) { console.error('Purge removes only DiskAtlas quarantine data. Re-run with `quarantine purge --yes` after reviewing the list.'); process.exitCode = 2; return; }
       try {
         const batches = (await fs.readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory());
         for (const batch of batches) await fs.rm(path.join(root, batch.name), { recursive: true, force: true });
@@ -225,7 +225,7 @@ async function run() {
     console.log('Safety mode: permanent deletion disabled; scan and clean preview are available.');
     return;
   }
-  console.log('shed scan|report|explain|plan|clean|history|doctor|gui');
+  console.log('diskatlas scan|report|explain|plan|clean|history|doctor|gui');
 }
 
 run().catch((error) => { console.error(error.message); process.exitCode = 1; });
