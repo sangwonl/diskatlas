@@ -10,6 +10,10 @@ export function CachedAnalysis(arg1) {
   return window['go']['main']['App']['CachedAnalysis'](arg1);
 }
 
+export function CancelFolderMap(arg1) {
+  return window['go']['main']['App']['CancelFolderMap'](arg1);
+}
+
 export function ChooseScanRoot() {
   return window['go']['main']['App']['ChooseScanRoot']();
 }

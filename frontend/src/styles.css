@@ -64,11 +64,11 @@ button { font: inherit; }
 .age-year { background: #94633b; }
 .age-old { background: #6c4850; }
 .size-unknown { background: #59656d; }
-.inspector { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-width: 0; color: var(--muted); font-size: 12px; }
+.inspector { display: flex; align-items: center; justify-content: flex-start; gap: 20px; min-width: 0; color: var(--muted); font-size: 12px; }
 .scan-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pulse { display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--accent); border-radius: 50%; animation: pulse 1s infinite alternate; }
-.selection { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.selection strong { max-width: 42vw; overflow: hidden; color: #dce5ea; text-overflow: ellipsis; white-space: nowrap; }
+.selection { display: flex; flex: 1 1 0; align-items: center; gap: 12px; min-width: 0; }
+.selection strong { flex: 1 1 0; min-width: 0; overflow: hidden; color: #dce5ea; text-overflow: ellipsis; white-space: nowrap; }
 .selection button { padding: 4px 8px; color: var(--accent); background: transparent; border: 1px solid var(--line); border-radius: 5px; cursor: pointer; }
 .first-run, .map-empty, .map-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
 .first-run { flex-direction: column; gap: 10px; }

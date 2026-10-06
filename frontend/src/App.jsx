@@ -1,6 +1,6 @@
 import React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { chooseScanRoot, folderMap, getScanRoot, measureFolderMap, onScanProgress, refreshFolderMap, revealPath, storageInfo } from './lib/api';
+import { cancelFolderMap, chooseScanRoot, folderMap, getScanRoot, measureFolderMap, onScanProgress, refreshFolderMap, revealPath, storageInfo } from './lib/api';
 import { layoutTreemap } from './lib/treemap';
 
 const DAY = 86_400_000;
@@ -257,6 +257,13 @@ export default function App() {
   const [error, setError] = useState('');
   const [choosingRoot, setChoosingRoot] = useState(false);
 
+  const cancelActiveFolderMeasurement = () => {
+    const requestID = activeProgressRequestRef.current;
+    if (!requestID) return;
+    activeProgressRequestRef.current = '';
+    cancelFolderMap(requestID).catch(() => {});
+  };
+
   const acceptMap = next => {
     currentPathRef.current = next.path;
     setData(next);
@@ -320,6 +327,7 @@ export default function App() {
   };
 
   const loadMap = async (path = '', remember = false, force = false, measure = false) => {
+    cancelActiveFolderMeasurement();
     const key = path || data?.root || currentPathRef.current || scanRoot || '/';
     const cached = mapCacheRef.current.get(key);
     if (cached && !force && hasMeasuredFolderMap(cached) && (!measure || cached.sizeKnown !== false)) {
@@ -329,6 +337,7 @@ export default function App() {
       acceptMap(cached);
       setScanning(false);
       setProgress(null);
+      setRefreshing(false);
       setVirtualStack([]);
       setSelected(null);
       setHovered(null);
@@ -457,9 +466,11 @@ export default function App() {
 
   const goBack = async () => {
     if (virtualStack.length) {
+      cancelActiveFolderMeasurement();
       loadRequestRef.current += 1;
       activeProgressRequestRef.current = '';
       setLoading(false);
+      setRefreshing(false);
       setScanning(false);
       setProgress(null);
       setVirtualStack(stack => stack.slice(0, -1));
@@ -475,9 +486,11 @@ export default function App() {
 
   const openCell = cell => {
     if (cell.virtual) {
+      cancelActiveFolderMeasurement();
       loadRequestRef.current += 1;
       activeProgressRequestRef.current = '';
       setLoading(false);
+      setRefreshing(false);
       setScanning(false);
       setProgress(null);
       setVirtualStack(stack => [...stack, { group: cell }]);

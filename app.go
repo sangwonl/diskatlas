@@ -20,6 +20,8 @@ type App struct {
 	ctx         context.Context
 	mu          sync.RWMutex
 	rootMu      sync.RWMutex
+	folderMapMu sync.Mutex
+	folderMaps  map[string]context.CancelFunc
 	lastScan    *core.Result
 	defaultRoot string
 	rootError   error
@@ -218,12 +220,44 @@ func (a *App) RefreshFolderMap(path, requestID string) (*core.FolderMap, error) 
 }
 
 func (a *App) measureFolderMap(path, requestID string, refresh bool) (*core.FolderMap, error) {
-	return core.MeasureFolderMap(a.scanRoot(), path, refresh, func(progress core.Progress) {
+	ctx, cancel := context.WithCancel(context.Background())
+	if requestID != "" {
+		a.folderMapMu.Lock()
+		if a.folderMaps == nil {
+			a.folderMaps = make(map[string]context.CancelFunc)
+		}
+		previous := a.folderMaps[requestID]
+		a.folderMaps[requestID] = cancel
+		a.folderMapMu.Unlock()
+		if previous != nil {
+			previous()
+		}
+		defer func() {
+			a.folderMapMu.Lock()
+			delete(a.folderMaps, requestID)
+			a.folderMapMu.Unlock()
+		}()
+	}
+	defer cancel()
+	return core.MeasureFolderMapContext(ctx, a.scanRoot(), path, refresh, func(progress core.Progress) {
 		if a.ctx != nil {
 			progress.RequestID = requestID
 			wailsruntime.EventsEmit(a.ctx, "scan:progress", progress)
 		}
 	})
+}
+
+// CancelFolderMap stops an active folder measurement started by requestID.
+func (a *App) CancelFolderMap(requestID string) {
+	if requestID == "" {
+		return
+	}
+	a.folderMapMu.Lock()
+	cancel := a.folderMaps[requestID]
+	a.folderMapMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (a *App) Rules() []core.Rule {

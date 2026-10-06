@@ -2,6 +2,7 @@ package core
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/gob"
 	"encoding/hex"
@@ -117,6 +118,15 @@ func ReloadFolderMap(root, target string) (*FolderMap, error) {
 // concurrently. The walk also persists a compact size aggregate for every
 // visited directory so opening deeper levels reuses the same traversal.
 func MeasureFolderMap(root, target string, force bool, onProgress func(Progress)) (*FolderMap, error) {
+	return MeasureFolderMapContext(context.Background(), root, target, force, onProgress)
+}
+
+// MeasureFolderMapContext measures one folder and its immediate subdirectories,
+// stopping promptly when the caller cancels the request.
+func MeasureFolderMapContext(ctx context.Context, root, target string, force bool, onProgress func(Progress)) (*FolderMap, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	normalizedRoot, normalizedTarget, err := normalizeFolderMapPaths(root, target)
 	if err != nil {
 		return nil, err
@@ -181,33 +191,49 @@ func MeasureFolderMap(root, target string, force bool, onProgress func(Progress)
 		for worker := 0; worker < workers; worker++ {
 			go func() {
 				defer workersDone.Done()
-				for index := range jobs {
-					entry := result.Children[index]
-					measured := measureFolderEntry(entry.Path, func(path string) {
-						if scanned.Add(1)%128 == 0 {
-							report(path, false)
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case index, ok := <-jobs:
+						if !ok {
+							return
 						}
-					})
-					measuredSubtrees[index] = measured
-					entry.Bytes = measured.Bytes
-					entry.Files = measured.Files
-					if measured.ModifiedAt != "" {
-						entry.ModifiedAt = measured.ModifiedAt
-					}
-					entry.SizeKnown = measured.Known
-					entry.SizeComplete = measured.Complete
-					result.Children[index] = entry
-					if !measured.Complete {
-						resultsMu.Lock()
-						allMeasured = false
-						resultsMu.Unlock()
+						entry := result.Children[index]
+						measured, measureErr := measureFolderEntry(ctx, entry.Path, func(path string) {
+							if scanned.Add(1)%128 == 0 {
+								report(path, false)
+							}
+						})
+						if measureErr != nil {
+							return
+						}
+						measuredSubtrees[index] = measured
+						entry.Bytes = measured.Bytes
+						entry.Files = measured.Files
+						if measured.ModifiedAt != "" {
+							entry.ModifiedAt = measured.ModifiedAt
+						}
+						entry.SizeKnown = measured.Known
+						entry.SizeComplete = measured.Complete
+						result.Children[index] = entry
+						if !measured.Complete {
+							resultsMu.Lock()
+							allMeasured = false
+							resultsMu.Unlock()
+						}
 					}
 				}
 			}()
 		}
+	dispatch:
 		for index, entry := range result.Children {
 			if entry.Directory {
-				jobs <- index
+				select {
+				case jobs <- index:
+				case <-ctx.Done():
+					break dispatch
+				}
 			}
 		}
 		close(jobs)
@@ -215,11 +241,17 @@ func MeasureFolderMap(root, target string, force bool, onProgress func(Progress)
 	} else {
 		close(jobs)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	result.Bytes = 0
 	result.Files = 0
 	result.ModifiedAt = ""
 	for _, entry := range result.Children {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if entry.Directory && !entry.SizeKnown {
 			allMeasured = false
 		}
@@ -246,10 +278,16 @@ func MeasureFolderMap(root, target string, force bool, onProgress func(Progress)
 				aggregates[path] = aggregate
 			}
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		storeFolderMapAggregates(normalizedRoot, normalizedTarget, aggregates)
 	}
 	if jobCount > 0 {
 		report(normalizedTarget, true)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	_ = saveFolderMapSnapshot(result)
 	return result, nil
@@ -343,18 +381,24 @@ type measuredFolder struct {
 	Aggregates map[string]folderMapAggregate
 }
 
-func measureFolderEntry(root string, onEntry func(string)) measuredFolder {
+func measureFolderEntry(ctx context.Context, root string, onEntry func(string)) (measuredFolder, error) {
+	if err := ctx.Err(); err != nil {
+		return measuredFolder{}, err
+	}
 	rootInfo, rootErr := os.Stat(root)
 	if rootErr != nil {
 		return measuredFolder{Aggregates: map[string]folderMapAggregate{
 			root: {Known: false, Complete: false, ScannedAt: time.Now()},
-		}}
+		}}, nil
 	}
 	rootDevice := filesystemIdentity(root, rootInfo)
-	return measureFolderTree(root, rootDevice, onEntry)
+	return measureFolderTree(ctx, root, rootDevice, onEntry)
 }
 
-func measureFolderTree(path string, rootDevice string, onEntry func(string)) measuredFolder {
+func measureFolderTree(ctx context.Context, path string, rootDevice string, onEntry func(string)) (measuredFolder, error) {
+	if err := ctx.Err(); err != nil {
+		return measuredFolder{}, err
+	}
 	now := time.Now()
 	result := measuredFolder{Known: true, Complete: true, Aggregates: make(map[string]folderMapAggregate)}
 	info, err := os.Lstat(path)
@@ -362,7 +406,7 @@ func measureFolderTree(path string, rootDevice string, onEntry func(string)) mea
 		result.Known = false
 		result.Complete = false
 		result.Aggregates[path] = folderMapAggregate{Known: false, Complete: false, ScannedAt: now}
-		return result
+		return result, nil
 	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
@@ -371,9 +415,12 @@ func measureFolderTree(path string, rootDevice string, onEntry func(string)) mea
 		result.Aggregates[path] = folderMapAggregate{
 			Known: false, Complete: false, StatModTime: info.ModTime().UnixNano(), StatSize: info.Size(), ScannedAt: now,
 		}
-		return result
+		return result, nil
 	}
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return measuredFolder{}, err
+		}
 		childPath := filepath.Join(path, entry.Name())
 		childInfo, statErr := os.Lstat(childPath)
 		if statErr != nil {
@@ -388,7 +435,10 @@ func measureFolderTree(path string, rootDevice string, onEntry func(string)) mea
 				}
 				continue
 			}
-			child := measureFolderTree(childPath, rootDevice, onEntry)
+			child, childErr := measureFolderTree(ctx, childPath, rootDevice, onEntry)
+			if childErr != nil {
+				return measuredFolder{}, childErr
+			}
 			result.Bytes += child.Bytes
 			result.Files += child.Files
 			result.Complete = result.Complete && child.Complete
@@ -415,7 +465,7 @@ func measureFolderTree(path string, rootDevice string, onEntry func(string)) mea
 		Known: true, Complete: result.Complete,
 		StatModTime: info.ModTime().UnixNano(), StatSize: info.Size(), ScannedAt: now,
 	}
-	return result
+	return result, nil
 }
 
 func applyFolderMapAggregates(snapshot *FolderMap) bool {
