@@ -65,7 +65,7 @@ The scripts never generate or embed certificates, Apple credentials, Store ident
 
 ## GitHub Releases and Homebrew
 
-The GitHub Actions release workflow runs when a `vMAJOR.MINOR.PATCH` tag is pushed. It checks that the tag matches both `package.json` and `wails.json`, then publishes the signed and notarized macOS universal DMG and ZIP as GitHub Release assets. Windows is optional: set `ENABLE_WINDOWS_RELEASE` to `true`. If both Windows signing secrets are configured, the installer is signed; if neither is configured, Actions builds and publishes it unsigned. Unsigned downloads can show prominent SmartScreen warnings or be blocked by managed PCs.
+Run the **Release** workflow manually from the Actions tab after pushing the intended commit. It reads the version from `package.json`, checks that `wails.json` has the same `productVersion`, and creates the corresponding `vMAJOR.MINOR.PATCH` tag automatically. Windows is optional: set `ENABLE_WINDOWS_RELEASE` to `true`. If both Windows signing secrets are configured, the installer is signed; if neither is configured, Actions builds and publishes it unsigned. Unsigned downloads can show prominent SmartScreen warnings or be blocked by managed PCs.
 
 Set the following in the source repository's **Settings → Secrets and variables → Actions**:
 
@@ -85,4 +85,4 @@ Set the following in the source repository's **Settings → Secrets and variable
 
 The Tap is the separate `sangwonl/homebrew-tap` GitHub repository, not a `homebrew-tap` subdirectory inside this source repository. After a successful GitHub Release, the workflow updates `Casks/diskatlas.rb` in that Tap with the DMG URL and SHA-256. Users install it with `brew install --cask sangwonl/tap/diskatlas`. A single Tap can provide multiple apps by keeping one cask file per app in its `Casks/` directory.
 
-For each release, update the versions in `package.json` and `wails.json`, commit the change, and push the matching tag. The Store packaging scripts and signing settings remain separate and available for later use.
+For each release, update `package.json`'s version and set the same value in `wails.json`, commit and push the change, then run the **Release** workflow on that commit. The workflow creates the GitHub tag from `package.json`; you do not need to create or push a tag yourself. The Store packaging scripts and signing settings remain separate and available for later use.

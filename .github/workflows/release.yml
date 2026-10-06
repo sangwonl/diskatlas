@@ -1,9 +1,7 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,29 +15,35 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Verify tag matches application versions
+      - name: Read package version and prepare release tag
         id: version
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync("package.json", "utf8")).version)')"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release tags must use vMAJOR.MINOR.PATCH (received: $GITHUB_REF_NAME)." >&2
+            echo "package.json version must use MAJOR.MINOR.PATCH (received: $version)." >&2
             exit 1
           fi
           node --input-type=module -e '
             import { readFileSync } from "node:fs";
             const expected = process.argv[1];
-            const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
             const productVersion = JSON.parse(readFileSync("wails.json", "utf8")).info.productVersion;
-            if (packageVersion !== expected || productVersion !== expected) {
-              console.error(`Tag ${expected} must match package.json (${packageVersion}) and wails.json (${productVersion}).`);
+            if (productVersion !== expected) {
+              console.error(`wails.json productVersion (${productVersion}) must match package.json version (${expected}).`);
               process.exit(1);
             }
           ' "$version"
+          tag="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "Release tag $tag already exists. Bump package.json before starting another release." >&2
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   macos:
     needs: validate-version
@@ -214,6 +218,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
       - uses: actions/download-artifact@v8
         with:
           pattern: '*-release-assets'
@@ -223,10 +231,18 @@ jobs:
       - name: Create checksums
         run: sha256sum dist/release/* > SHA256SUMS.txt
 
+      - name: Create release tag from package version
+        env:
+          RELEASE_TAG: ${{ needs.validate-version.outputs.tag }}
+        run: |
+          git tag "$RELEASE_TAG" "$GITHUB_SHA"
+          git push origin "$RELEASE_TAG"
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/release/* SHA256SUMS.txt --title "DiskAtlas ${{ needs.validate-version.outputs.version }}" --generate-notes --verify-tag
+          RELEASE_TAG: ${{ needs.validate-version.outputs.tag }}
+        run: gh release create "$RELEASE_TAG" dist/release/* SHA256SUMS.txt --title "DiskAtlas ${{ needs.validate-version.outputs.version }}" --generate-notes --verify-tag
 
   publish-homebrew-cask:
     needs: [validate-version, macos, publish]
@@ -238,12 +254,13 @@ jobs:
       HOMEBREW_TAP_REPOSITORY: sangwonl/homebrew-tap
       HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
       VERSION: ${{ needs.validate-version.outputs.version }}
+      RELEASE_TAG: ${{ needs.validate-version.outputs.tag }}
       SOURCE_REPOSITORY: ${{ github.repository }}
     steps:
       - name: Validate Tap settings
         shell: bash
         run: |
-          : "${HOMEBREW_TAP_REPOSITORY:?Set the HOMEBREW_TAP_REPOSITORY repository variable.}"
+          : "${HOMEBREW_TAP_REPOSITORY:?Homebrew Tap repository is not configured.}"
           : "${HOMEBREW_TAP_GITHUB_TOKEN:?Set the HOMEBREW_TAP_GITHUB_TOKEN secret with write access to the Tap repository.}"
 
       - uses: actions/checkout@v7
@@ -269,7 +286,7 @@ jobs:
             version "${VERSION}"
             sha256 "${sha256}"
 
-            url "https://github.com/${SOURCE_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/DiskAtlas-${VERSION}-macOS-universal.dmg"
+            url "https://github.com/${SOURCE_REPOSITORY}/releases/download/${RELEASE_TAG}/DiskAtlas-${VERSION}-macOS-universal.dmg"
             name "DiskAtlas"
             desc "Interactive map for exploring disk usage"
             homepage "https://github.com/${SOURCE_REPOSITORY}"
