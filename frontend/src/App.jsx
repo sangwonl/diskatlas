@@ -1,7 +1,9 @@
 import React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cancelFolderMap, chooseScanRoot, folderMap, getScanRoot, measureFolderMap, onScanProgress, refreshFolderMap, revealPath, storageInfo } from './lib/api';
+import { BrowserOpenURL } from '../wailsjs/runtime/runtime';
 import { layoutTreemap } from './lib/treemap';
+import { appVersion, checkForUpdate, updatePreview } from './lib/updates';
 
 const DAY = 86_400_000;
 
@@ -256,6 +258,7 @@ export default function App() {
   const [virtualStack, setVirtualStack] = useState([]);
   const [error, setError] = useState('');
   const [choosingRoot, setChoosingRoot] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState(null);
 
   const cancelActiveFolderMeasurement = () => {
     const requestID = activeProgressRequestRef.current;
@@ -263,6 +266,19 @@ export default function App() {
     activeProgressRequestRef.current = '';
     cancelFolderMap(requestID).catch(() => {});
   };
+
+  useEffect(() => {
+    let active = true;
+    const check = updatePreview
+      ? Promise.resolve({ version: '0.1.1', url: 'https://github.com/sangwonl/diskatlas/releases/latest' })
+      : checkForUpdate();
+    check.then(update => {
+      if (!active || !update) return;
+      const dismissedVersion = window.localStorage.getItem('diskatlas-dismissed-update');
+      if (dismissedVersion !== update.version) setAvailableUpdate(update);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   const acceptMap = next => {
     currentPathRef.current = next.path;
@@ -512,6 +528,11 @@ export default function App() {
     await loadMap(path, false, false, true);
   };
 
+  const dismissAvailableUpdate = () => {
+    if (availableUpdate) window.localStorage.setItem('diskatlas-dismissed-update', availableUpdate.version);
+    setAvailableUpdate(null);
+  };
+
   const used = storage ? Math.max(0, Number(storage.total) - Number(storage.available)) : 0;
   const scanCount = Number(progress?.filesScanned || 0);
   const loadingText = scanning
@@ -530,7 +551,19 @@ export default function App() {
   ] : [];
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${availableUpdate ? ' has-update' : ''}`}>
+      {availableUpdate && <aside className="update-notice" role="status" aria-live="polite">
+        <span className="update-notice-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3" /></svg>
+        </span>
+        <div className="update-notice-copy">
+          <strong>DiskAtlas 업데이트가 있어요</strong>
+          <span>현재 {appVersion} · 새 버전 {availableUpdate.version}. 릴리스 내용을 확인해보세요.</span>
+        </div>
+        <button className="update-notice-open" onClick={() => BrowserOpenURL(availableUpdate.url)}>릴리스 보기</button>
+        <button className="update-notice-later" onClick={dismissAvailableUpdate}>나중에</button>
+      </aside>}
+
       <header className="topbar">
         <div className="brand">DiskAtlas</div>
         <nav className="breadcrumbs" aria-label="현재 경로">

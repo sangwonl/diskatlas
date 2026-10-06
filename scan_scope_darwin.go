@@ -33,6 +33,14 @@ static void shed_clear_active_scope(void) {
 	}
 }
 
+static void shed_perform_on_main_queue(dispatch_block_t operation) {
+	if ([NSThread isMainThread]) {
+		operation();
+		return;
+	}
+	dispatch_sync(dispatch_get_main_queue(), operation);
+}
+
 static BOOL shed_set_active_scope(NSURL *url, BOOL securityScoped, NSString **errorMessage) {
 	if (securityScoped && ![url startAccessingSecurityScopedResource]) {
 		if (errorMessage != NULL) *errorMessage = @"macOS가 선택한 폴더 접근 권한을 열지 못했습니다.";
@@ -54,7 +62,7 @@ static char *shed_choose_folder(const char *initialPath, char **bookmarkOutput, 
 	__block NSString *selectedBookmark = nil;
 	__block NSString *failure = nil;
 	BOOL sandboxed = shed_is_sandboxed();
-	dispatch_sync(dispatch_get_main_queue(), ^{
+	shed_perform_on_main_queue(^{
 		@autoreleasepool {
 			NSOpenPanel *panel = [NSOpenPanel openPanel];
 			panel.title = @"분석할 폴더 선택";
@@ -99,7 +107,7 @@ static char *shed_start_folder_scope(const char *bookmarkString, char **renewedB
 	__block NSString *failure = nil;
 	NSString *encoded = bookmarkString == NULL ? nil : [NSString stringWithUTF8String:bookmarkString];
 	BOOL sandboxed = shed_is_sandboxed();
-	dispatch_sync(dispatch_get_main_queue(), ^{
+	shed_perform_on_main_queue(^{
 		@autoreleasepool {
 			NSData *bookmark = [[NSData alloc] initWithBase64EncodedString:encoded options:0];
 			if (bookmark == nil) {
@@ -134,7 +142,7 @@ static char *shed_start_folder_scope(const char *bookmarkString, char **renewedB
 }
 
 static void shed_stop_folder_scope(void) {
-	dispatch_sync(dispatch_get_main_queue(), ^{
+	shed_perform_on_main_queue(^{
 		@autoreleasepool { shed_clear_active_scope(); }
 	});
 }
