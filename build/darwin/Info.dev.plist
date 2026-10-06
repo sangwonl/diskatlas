@@ -23,6 +23,16 @@
         <string>true</string>
         <key>NSHumanReadableCopyright</key>
         <string>{{.Info.Copyright}}</string>
+        <key>NSDesktopFolderUsageDescription</key>
+        <string>DiskAtlas reads folders you choose to show how disk space is used.</string>
+        <key>NSDocumentsFolderUsageDescription</key>
+        <string>DiskAtlas reads folders you choose to show how disk space is used.</string>
+        <key>NSDownloadsFolderUsageDescription</key>
+        <string>DiskAtlas reads folders you choose to show how disk space is used.</string>
+        <key>NSNetworkVolumesUsageDescription</key>
+        <string>DiskAtlas reads folders you choose to show how disk space is used.</string>
+        <key>NSRemovableVolumesUsageDescription</key>
+        <string>DiskAtlas reads folders you choose to show how disk space is used.</string>
         {{if .Info.FileAssociations}}
         <key>CFBundleDocumentTypes</key>
         <array>

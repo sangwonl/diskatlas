@@ -13,14 +13,12 @@ DiskAtlas is a desktop disk-usage explorer for macOS and Windows. It maps folder
 Install with Homebrew:
 
 ```sh
-brew tap sangwonl/tap
-brew install --cask diskatlas
-brew trust --cask sangwonl/tap/diskatlas
+brew install --cask sangwonl/tap/diskatlas
 ```
 
-The Cask will be available after the first GitHub Release. You can also download the universal macOS app from [GitHub Releases](https://github.com/sangwonl/diskatlas/releases/latest).
+You can also download the universal macOS app from [GitHub Releases](https://github.com/sangwonl/diskatlas/releases/latest).
 
-Some macOS locations require Full Disk Access for a complete scan. Grant access in **System Settings → Privacy & Security → Full Disk Access** if DiskAtlas cannot read folders you want to inspect.
+macOS may ask for access the first time DiskAtlas reads protected locations such as Desktop, Documents, Downloads, external drives, or network volumes. Full Disk Access has no automatic permission popup; grant it in **System Settings → Privacy & Security → Full Disk Access** if you want DiskAtlas to inspect protected system locations.
 
 ### Windows
 
