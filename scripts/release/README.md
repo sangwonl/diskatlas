@@ -26,12 +26,14 @@ Output: `dist/release/macos/app-store/DiskAtlas-<version>.pkg`. Upload that pack
 Requires a **Developer ID Application** identity and a `notarytool` Keychain profile. Create the profile once; keep credentials in Keychain rather than in shell history or this repository:
 
 ```sh
-xcrun notarytool store-credentials diskatlas-notary --apple-id 'you@example.com' --team-id TEAMID --password 'app-specific-password'
+xcrun notarytool store-credentials diskatlas-notary --apple-id 'you@example.com' --team-id TEAMID
 export DISKATLAS_BUNDLE_ID=com.example.diskatlas
 export MAC_APP_IDENTITY='Developer ID Application: Example, Inc. (TEAMID)'
 export MAC_NOTARY_PROFILE=diskatlas-notary
 npm run release:mac:direct
 ```
+
+When prompted, enter an app-specific password generated at [account.apple.com](https://account.apple.com/) under **Sign-In and Security → App-Specific Passwords**.
 
 Output: a stapled universal `.dmg` and `.zip` in `dist/release/macos/direct/`. The app and disk image are signed and notarized; their tickets are stapled before release. Direct builds are not App Sandbox builds, so normal macOS privacy controls (including Full Disk Access where required) still apply. Use this channel when whole-disk exploration is the priority.
 
@@ -75,9 +77,9 @@ Set the following in the source repository's **Settings → Secrets and variable
 | `MAC_APP_IDENTITY` | Secret | Exact Developer ID Application identity name |
 | `MACOS_CERTIFICATE_BASE64` | Secret | Base64-encoded `.p12` containing the Developer ID Application certificate and private key |
 | `MACOS_CERTIFICATE_PASSWORD` | Secret | Password for that `.p12` |
-| `APPLE_NOTARY_API_KEY_BASE64` | Secret | Base64-encoded App Store Connect API `.p8` key authorized for notarization |
-| `APPLE_NOTARY_KEY_ID` | Secret | App Store Connect API key ID |
-| `APPLE_NOTARY_ISSUER_ID` | Secret | App Store Connect issuer ID |
+| `APPLE_ID` | Secret | Apple Account email used by the Developer ID team |
+| `APPLE_TEAM_ID` | Secret | 10-character Team ID from Apple Developer account Membership details |
+| `APPLE_APP_SPECIFIC_PASSWORD` | Secret | App-specific password for `notarytool`; do not use your normal Apple Account password |
 | `HOMEBREW_TAP_GITHUB_TOKEN` | Secret | Fine-grained token with Contents read/write access to the Tap repository |
 | `ENABLE_WINDOWS_RELEASE` | Variable | Set to `true` to include Windows builds |
 | `WINDOWS_SIGNING_CERTIFICATE_BASE64` | Secret | Optional base64-encoded Authenticode `.pfx`; leave both Windows signing secrets unset for an unsigned build |
