@@ -1,14 +1,14 @@
 export namespace core {
-
+	
 	export class StorageCategory {
 	    id: string;
 	    bytes: number;
 	    files: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StorageCategory(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -22,11 +22,11 @@ export namespace core {
 	    categories: StorageCategory[];
 	    skipped: number;
 	    complete: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Storage(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.total = source["total"];
@@ -35,7 +35,7 @@ export namespace core {
 	        this.skipped = source["skipped"];
 	        this.complete = source["complete"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -63,11 +63,11 @@ export namespace core {
 	    bytes: number;
 	    count: number;
 	    itemIds: string[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Group(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -83,11 +83,11 @@ export namespace core {
 	export class TierSummary {
 	    bytes: number;
 	    count: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TierSummary(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.bytes = source["bytes"];
@@ -102,11 +102,11 @@ export namespace core {
 	    candidateBytes: number;
 	    candidateFiles: number;
 	    labels?: string[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new DirectorySummary(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
@@ -137,11 +137,11 @@ export namespace core {
 	    clean: string;
 	    action?: string;
 	    labels?: string[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Item(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -172,11 +172,11 @@ export namespace core {
 	    summary: Record<string, TierSummary>;
 	    groups: Group[];
 	    durationMs: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Result(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.generatedAt = source["generatedAt"];
@@ -187,7 +187,7 @@ export namespace core {
 	        this.groups = this.convertValues(source["groups"], Group);
 	        this.durationMs = source["durationMs"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -209,17 +209,17 @@ export namespace core {
 	export class Analysis {
 	    result?: Result;
 	    storage: Storage;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Analysis(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.result = this.convertValues(source["result"], Result);
 	        this.storage = this.convertValues(source["storage"], Storage);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -242,11 +242,11 @@ export namespace core {
 	    id: string;
 	    path: string;
 	    reason: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new BlockedItem(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -261,11 +261,11 @@ export namespace core {
 	    confirmationToken: string;
 	    mode: string;
 	    immediateReclaim: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new CleanupPreview(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.items = this.convertValues(source["items"], Item);
@@ -275,7 +275,7 @@ export namespace core {
 	        this.mode = source["mode"];
 	        this.immediateReclaim = source["immediateReclaim"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -299,11 +299,11 @@ export namespace core {
 	    mode: string;
 	    acknowledgeRisk: boolean;
 	    confirmation: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new CleanupRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ids = source["ids"];
@@ -320,11 +320,11 @@ export namespace core {
 	    actualBytes: number;
 	    quarantineId?: string;
 	    finishedAt: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new CleanupResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.mode = source["mode"];
@@ -335,7 +335,7 @@ export namespace core {
 	        this.quarantineId = source["quarantineId"];
 	        this.finishedAt = source["finishedAt"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -354,7 +354,7 @@ export namespace core {
 		    return a;
 		}
 	}
-
+	
 	export class FolderMapEntry {
 	    name: string;
 	    path: string;
@@ -367,11 +367,11 @@ export namespace core {
 	    sizeStale: boolean;
 	    statModTime: number;
 	    statSize: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new FolderMapEntry(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -400,11 +400,11 @@ export namespace core {
 	    sizeKnown: boolean;
 	    sizeComplete: boolean;
 	    children: FolderMapEntry[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new FolderMap(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.root = source["root"];
@@ -420,7 +420,7 @@ export namespace core {
 	        this.sizeComplete = source["sizeComplete"];
 	        this.children = this.convertValues(source["children"], FolderMapEntry);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -439,10 +439,10 @@ export namespace core {
 		    return a;
 		}
 	}
-
-
-
-
+	
+	
+	
+	
 	export class Rule {
 	    id: string;
 	    name: string;
@@ -458,11 +458,11 @@ export namespace core {
 	    minBytes?: number;
 	    minFiles?: number;
 	    olderThanDays?: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Rule(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -481,8 +481,8 @@ export namespace core {
 	        this.olderThanDays = source["olderThanDays"];
 	    }
 	}
-
-
+	
+	
 
 }
 

@@ -7,10 +7,10 @@
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
   "info": {
-    "companyName": "DiskAtlas",
+    "companyName": "sangwonl",
     "productName": "DiskAtlas",
-    "productVersion": "0.1.0",
-    "copyright": "Copyright © 2026 DiskAtlas",
+    "productVersion": "0.1.1",
+    "copyright": "Copyright © 2026 sangwonl",
     "comments": "Explore disk usage with an interactive map"
   },
   "author": {
