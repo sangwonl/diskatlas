@@ -15,6 +15,7 @@ Install with Homebrew:
 ```sh
 brew tap sangwonl/tap
 brew install --cask diskatlas
+brew trust --cask sangwonl/tap/diskatlas
 ```
 
 The Cask will be available after the first GitHub Release. You can also download the universal macOS app from [GitHub Releases](https://github.com/sangwonl/diskatlas/releases/latest).
