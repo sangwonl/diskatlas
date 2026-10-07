@@ -272,6 +272,24 @@ func (a *App) StorageInfo() (core.Storage, error) {
 	return core.StorageInfoAt(root)
 }
 
+func (a *App) TrashPath(path string, estimatedBytes int64) (core.TrashMoveResult, error) {
+	return core.MoveToTrash(a.scanRoot(), path, estimatedBytes)
+}
+
+func (a *App) OpenTrash() error {
+	if runtime.GOOS == "darwin" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		return exec.Command("open", filepath.Join(home, ".Trash")).Run()
+	}
+	if runtime.GOOS == "windows" {
+		return exec.Command("explorer.exe", "shell:RecycleBinFolder").Run()
+	}
+	return exec.Command("xdg-open", "trash:///").Run()
+}
+
 func (a *App) ScanStorage() (core.Storage, error) {
 	return core.ScanStorage(func(storage core.Storage) {
 		if a.ctx != nil {

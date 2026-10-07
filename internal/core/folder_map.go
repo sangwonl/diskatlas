@@ -43,6 +43,7 @@ type FolderMapEntry struct {
 	Files      int    `json:"files"`
 	ModifiedAt string `json:"modifiedAt,omitempty"`
 	Directory  bool   `json:"directory"`
+	Symlink    bool   `json:"symlink"`
 	// Incomplete directories retain their readable byte total as a lower bound.
 	SizeKnown    bool  `json:"sizeKnown"`
 	SizeComplete bool  `json:"sizeComplete"`
@@ -351,6 +352,7 @@ func readFolderMapLevel(root, target string) (*FolderMap, error) {
 		child := FolderMapEntry{
 			Name: entry.Name(), Path: childPath,
 			Directory:   childInfo.IsDir(),
+			Symlink:     childInfo.Mode()&os.ModeSymlink != 0,
 			ModifiedAt:  formatFolderMapTime(childInfo.ModTime().UnixNano()),
 			StatModTime: childInfo.ModTime().UnixNano(),
 			StatSize:    childInfo.Size(),
@@ -737,7 +739,7 @@ func folderMapSnapshotFresh(snapshot *FolderMap) bool {
 			return false
 		}
 		info, err := os.Lstat(filepath.Join(snapshot.Path, entry.Name()))
-		if err != nil || info.IsDir() != previous.Directory || info.ModTime().UnixNano() != previous.StatModTime || info.Size() != previous.StatSize {
+		if err != nil || info.IsDir() != previous.Directory || (info.Mode()&os.ModeSymlink != 0) != previous.Symlink || info.ModTime().UnixNano() != previous.StatModTime || info.Size() != previous.StatSize {
 			return false
 		}
 	}

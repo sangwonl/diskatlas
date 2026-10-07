@@ -19,6 +19,7 @@ export namespace core {
 	export class Storage {
 	    total: number;
 	    available: number;
+	    trashPending: number;
 	    categories: StorageCategory[];
 	    skipped: number;
 	    complete: boolean;
@@ -31,6 +32,7 @@ export namespace core {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.total = source["total"];
 	        this.available = source["available"];
+	        this.trashPending = source["trashPending"];
 	        this.categories = this.convertValues(source["categories"], StorageCategory);
 	        this.skipped = source["skipped"];
 	        this.complete = source["complete"];
@@ -362,6 +364,7 @@ export namespace core {
 	    files: number;
 	    modifiedAt?: string;
 	    directory: boolean;
+	    symlink: boolean;
 	    sizeKnown: boolean;
 	    sizeComplete: boolean;
 	    sizeStale: boolean;
@@ -380,6 +383,7 @@ export namespace core {
 	        this.files = source["files"];
 	        this.modifiedAt = source["modifiedAt"];
 	        this.directory = source["directory"];
+	        this.symlink = source["symlink"];
 	        this.sizeKnown = source["sizeKnown"];
 	        this.sizeComplete = source["sizeComplete"];
 	        this.sizeStale = source["sizeStale"];
@@ -483,6 +487,21 @@ export namespace core {
 	}
 	
 	
+	
+	export class TrashMoveResult {
+	    estimatedBytes: number;
+	    pendingSizeTracked: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new TrashMoveResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.estimatedBytes = source["estimatedBytes"];
+	        this.pendingSizeTracked = source["pendingSizeTracked"];
+	    }
+	}
 
 }
 

@@ -14,11 +14,12 @@ type StorageCategory struct {
 	Files int    `json:"files"`
 }
 type Storage struct {
-	Total      uint64            `json:"total"`
-	Available  uint64            `json:"available"`
-	Categories []StorageCategory `json:"categories"`
-	Skipped    int               `json:"skipped"`
-	Complete   bool              `json:"complete"`
+	Total        uint64            `json:"total"`
+	Available    uint64            `json:"available"`
+	TrashPending int64             `json:"trashPending"`
+	Categories   []StorageCategory `json:"categories"`
+	Skipped      int               `json:"skipped"`
+	Complete     bool              `json:"complete"`
 }
 
 func StorageInfo() (Storage, error) {
@@ -38,7 +39,7 @@ func StorageInfoAt(path string) (Storage, error) {
 
 func storageInfoAt(path string) (Storage, error) {
 	total, available, err := diskCapacity(path)
-	return Storage{Total: total, Available: available, Categories: []StorageCategory{}}, err
+	return Storage{Total: total, Available: available, TrashPending: trashPendingBytes(path), Categories: []StorageCategory{}}, err
 }
 
 // File categories describe readable home-directory files. Unmeasured system and

@@ -16,6 +16,8 @@ export function FolderMap(arg1:string):Promise<core.FolderMap>;
 
 export function MeasureFolderMap(arg1:string,arg2:string):Promise<core.FolderMap>;
 
+export function OpenTrash():Promise<void>;
+
 export function PreviewCleanup(arg1:core.CleanupRequest):Promise<core.CleanupPreview>;
 
 export function RefreshFolderMap(arg1:string,arg2:string):Promise<core.FolderMap>;
@@ -33,3 +35,5 @@ export function ScanRoot():Promise<string>;
 export function ScanStorage():Promise<core.Storage>;
 
 export function StorageInfo():Promise<core.Storage>;
+
+export function TrashPath(arg1:string,arg2:number):Promise<core.TrashMoveResult>;

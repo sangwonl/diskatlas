@@ -30,6 +30,10 @@ export function MeasureFolderMap(arg1, arg2) {
   return window['go']['main']['App']['MeasureFolderMap'](arg1, arg2);
 }
 
+export function OpenTrash() {
+  return window['go']['main']['App']['OpenTrash']();
+}
+
 export function PreviewCleanup(arg1) {
   return window['go']['main']['App']['PreviewCleanup'](arg1);
 }
@@ -64,4 +68,8 @@ export function ScanStorage() {
 
 export function StorageInfo() {
   return window['go']['main']['App']['StorageInfo']();
+}
+
+export function TrashPath(arg1, arg2) {
+  return window['go']['main']['App']['TrashPath'](arg1, arg2);
 }
