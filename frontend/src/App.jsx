@@ -454,15 +454,31 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    const check = updatePreview
-      ? Promise.resolve({ version: '0.1.1', url: 'https://github.com/sangwonl/diskatlas/releases/latest' })
-      : checkForUpdate();
-    check.then(update => {
-      if (!active || !update) return;
-      const dismissedVersion = window.localStorage.getItem('diskatlas-dismissed-update');
-      if (dismissedVersion !== update.version) setAvailableUpdate(update);
-    }).catch(() => {});
-    return () => { active = false; };
+    let checking = false;
+    const check = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const update = updatePreview
+          ? { version: '0.1.1', url: 'https://github.com/sangwonl/diskatlas/releases/latest' }
+          : await checkForUpdate();
+        if (!active || !update) return;
+        const dismissedVersion = window.localStorage.getItem('diskatlas-dismissed-update');
+        if (dismissedVersion !== update.version) setAvailableUpdate(update);
+      } catch (reason) {
+        console.warn('DiskAtlas update check failed:', reason);
+      } finally {
+        checking = false;
+      }
+    };
+    check();
+    window.addEventListener('focus', check);
+    const interval = window.setInterval(check, 6 * 60 * 60 * 1000);
+    return () => {
+      active = false;
+      window.removeEventListener('focus', check);
+      window.clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
