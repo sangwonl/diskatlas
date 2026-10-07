@@ -3,7 +3,6 @@
 package core
 
 import (
-	"os"
 	"strings"
 
 	"golang.org/x/sys/windows"
