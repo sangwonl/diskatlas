@@ -30,6 +30,14 @@ When a Windows build is included in a release:
 
 Windows releases are x64. Without a code-signing certificate, the installer is unsigned and may trigger SmartScreen.
 
+## Update
+
+DiskAtlas checks GitHub Releases for newer versions and shows a notice in the app when one is available. The notice opens the release page; updates are not installed automatically. Close DiskAtlas before updating, then install the latest release using the same method you used originally:
+
+- **Homebrew:** `brew update && brew upgrade --cask sangwonl/tap/diskatlas`
+- **macOS download:** download the latest DMG from [GitHub Releases](https://github.com/sangwonl/diskatlas/releases/latest), open it, and drag DiskAtlas into `/Applications`, choosing **Replace** when prompted.
+- **Windows:** download the latest `DiskAtlas-amd64-installer.exe` from [GitHub Releases](https://github.com/sangwonl/diskatlas/releases/latest) and run it. It updates the per-user installation.
+
 ## What it does
 
 - Maps disk usage so you can explore from large folders down to individual files.
