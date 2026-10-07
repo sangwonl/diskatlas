@@ -3,11 +3,15 @@ package main
 import (
 	"embed"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/menu"
+	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed all:frontend/dist
@@ -28,6 +32,7 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 245, G: 245, B: 247, A: 1},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
+		Menu:             applicationMenu(app),
 		Bind: []interface{}{
 			app,
 		},
@@ -36,6 +41,26 @@ func main() {
 	if err != nil {
 		println("Error:", err.Error())
 	}
+}
+
+func applicationMenu(app *App) *menu.Menu {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+
+	applicationMenu := menu.NewMenu()
+	applicationMenu.Append(menu.AppMenu())
+
+	fileMenu := menu.NewMenu()
+	fileMenu.AddText("Close Window", keys.CmdOrCtrl("w"), func(*menu.CallbackData) {
+		if app.ctx != nil {
+			wailsruntime.Quit(app.ctx)
+		}
+	})
+	applicationMenu.Append(menu.SubMenu("File", fileMenu))
+	applicationMenu.Append(menu.EditMenu())
+	applicationMenu.Append(menu.WindowMenu())
+	return applicationMenu
 }
 
 // scanRootFromArgs reads arguments forwarded by `wails dev -appargs ...`.
