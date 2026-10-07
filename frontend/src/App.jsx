@@ -455,9 +455,26 @@ export default function App() {
   useEffect(() => {
     let active = true;
     let checking = false;
+    let retryAttempt = 0;
+    let retryTimer = 0;
+    const retryDelays = [30 * 1000, 2 * 60 * 1000, 10 * 60 * 1000, 30 * 60 * 1000];
+    const scheduleRetry = () => {
+      if (!active || retryTimer) return;
+      const delay = retryDelays[Math.min(retryAttempt, retryDelays.length - 1)];
+      retryAttempt += 1;
+      retryTimer = window.setTimeout(() => {
+        retryTimer = 0;
+        check();
+      }, delay);
+    };
     const check = async () => {
-      if (checking) return;
+      if (!active || checking) return;
+      if (retryTimer) {
+        window.clearTimeout(retryTimer);
+        retryTimer = 0;
+      }
       checking = true;
+      let failed = false;
       try {
         const update = updatePreview
           ? { version: '0.1.1', url: 'https://github.com/sangwonl/diskatlas/releases/latest' }
@@ -466,9 +483,13 @@ export default function App() {
         const dismissedVersion = window.localStorage.getItem('diskatlas-dismissed-update');
         if (dismissedVersion !== update.version) setAvailableUpdate(update);
       } catch (reason) {
+        failed = true;
         console.warn('DiskAtlas update check failed:', reason);
       } finally {
         checking = false;
+        if (!active) return;
+        if (failed) scheduleRetry();
+        else retryAttempt = 0;
       }
     };
     check();
@@ -478,6 +499,7 @@ export default function App() {
       active = false;
       window.removeEventListener('focus', check);
       window.clearInterval(interval);
+      if (retryTimer) window.clearTimeout(retryTimer);
     };
   }, []);
 
