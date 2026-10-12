@@ -25,15 +25,6 @@ function errorMessage(reason) {
   return message.replace(/^Error:\s*/, '');
 }
 
-function ageClass(value) {
-  const age = value ? (Date.now() - Date.parse(value)) / DAY : Infinity;
-  if (age <= 7) return 'age-now';
-  if (age <= 30) return 'age-month';
-  if (age <= 180) return 'age-half';
-  if (age <= 365) return 'age-year';
-  return 'age-old';
-}
-
 function modifiedLabel(value) {
   if (!value) return '변경일 알 수 없음';
   const days = Math.max(0, Math.floor((Date.now() - Date.parse(value)) / DAY));
@@ -41,6 +32,43 @@ function modifiedLabel(value) {
   if (days < 30) return `${days}일 전 변경`;
   if (days < 365) return `${Math.floor(days / 30)}개월 전 변경`;
   return `${Math.floor(days / 365)}년 전 변경`;
+}
+
+function deltaValueLabel(item) {
+  if (!item?.deltaKnown) return '비교 기준 없음';
+  const delta = Number(item.deltaBytes || 0);
+  if (delta === 0) return '변화 없음';
+  return `${delta > 0 ? '+' : '−'}${bytes(Math.abs(delta))}`;
+}
+
+function deltaSummaryLabel(item) {
+  if (!item?.deltaKnown) return '증감 기준 없음';
+  const baseline = Date.parse(item.deltaSince || '');
+  const label = Number.isFinite(baseline)
+    ? `${new Date(baseline).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })} 기준`
+    : '기준 측정';
+  return `${label} 대비 ${deltaValueLabel(item)}`;
+}
+
+function deltaColorClass(item) {
+  if (!item?.deltaKnown || item.sizeKnown === false || item.sizeComplete === false) return 'delta-unknown';
+  const delta = Number(item.deltaBytes || 0);
+  if (delta === 0) return 'delta-neutral';
+  const magnitude = Math.abs(delta);
+  const tier = magnitude < 16 * 1024 ** 2 ? 1
+    : magnitude < 128 * 1024 ** 2 ? 2
+      : magnitude < 1024 ** 3 ? 3 : 4;
+  return `${delta > 0 ? 'delta-grown' : 'delta-shrunk'}-${tier}`;
+}
+
+function mapSummaryLabel(item) {
+  if (!item) return '용량을 면적으로, 증감을 색으로 표시합니다.';
+  const size = item.virtual
+    ? `${bytes(item.bytes)} · ${Number(item.groupedCount || 0).toLocaleString()}개 항목`
+    : item.sizeComplete
+      ? `${bytes(item.bytes)} · ${item.files.toLocaleString()}개 파일 · ${item.directories.toLocaleString()}개 폴더`
+      : `${bytes(item.bytes)} 확인된 용량`;
+  return `${size} · ${deltaSummaryLabel(item)}`;
 }
 
 function sizeLabel(item) {
@@ -276,6 +304,9 @@ function createVirtualGroup(rows, direct, virtualDepth) {
     name: `${representative.name || '항목'}${sortedSmall.length > 1 ? ` 외 ${sortedSmall.length - 1}개` : ''}`,
     path: `virtual:${representative.path || 'items'}`,
     bytes: groupedBytes,
+    deltaBytes: sortedSmall.reduce((sum, row) => sum + Number(row.deltaBytes || 0), 0),
+    deltaKnown: sortedSmall.every(row => row.deltaKnown === true),
+    deltaSince: sortedSmall.every(row => row.deltaSince === representative.deltaSince) ? representative.deltaSince : '',
     layoutBytes: Math.min(scaledBytes, maxVisualBytes),
     files: sortedSmall.reduce((sum, row) => sum + Number(row.files || 1), 0),
     modifiedAt: sortedSmall.reduce((latest, row) => (!latest || Date.parse(row.modifiedAt || '') > Date.parse(latest)) ? row.modifiedAt : latest, ''),
@@ -394,7 +425,7 @@ function Treemap({ data, selected, onSelect, onOpen, onBack, onHover, onPrefetch
             role="treeitem"
             key={cell.path}
             ref={node => { cellRefs.current[index] = node; }}
-            className={`map-cell density-${density} ${cell.sizeKnown === false ? 'size-unknown' : ageClass(cell.modifiedAt)} ${selected?.path === cell.path ? 'selected' : ''}`}
+            className={`map-cell density-${density} ${deltaColorClass(cell)} ${selected?.path === cell.path ? 'selected' : ''}`}
             tabIndex={index === activeIndex ? 0 : -1}
             style={{ left: `${cell.x}%`, top: `${cell.y}%`, width: `${cell.width}%`, height: `${cell.height}%` }}
             onClick={() => onSelect(cell)}
@@ -404,10 +435,10 @@ function Treemap({ data, selected, onSelect, onOpen, onBack, onHover, onPrefetch
             onMouseLeave={() => onHover(null)}
             onFocus={() => { onHover(cell); onSelect(cell); }}
             onBlur={() => onHover(null)}
-            title={`${cell.virtual ? cell.name : cell.path}\n${sizeLabel(cell)} · ${modifiedLabel(cell.modifiedAt)}`}
+            title={`${cell.virtual ? cell.name : cell.path}\n${sizeLabel(cell)} · ${deltaSummaryLabel(cell)} · ${modifiedLabel(cell.modifiedAt)}`}
           >
             {density >= 1 && <span className="cell-name">{cell.name}</span>}
-            {density >= 2 && <span className="cell-size">{`${sizeLabel(cell)}${cell.virtual && cell.groupedCount > 1 ? ` · ${cell.groupedCount}개` : ''}`}</span>}
+            {density >= 2 && <span className="cell-size">{`${sizeLabel(cell)}${cell.virtual && cell.groupedCount > 1 ? ` · ${cell.groupedCount}개` : ''}${density >= 3 && cell.deltaKnown ? ` · ${deltaValueLabel(cell)}` : ''}`}</span>}
             {density >= 3 && <span className="cell-date">{modifiedLabel(cell.modifiedAt)}</span>}
           </button>
         );
@@ -541,8 +572,10 @@ export default function App() {
       const parent = mapCacheRef.current.get(path);
       if (!parent) return;
       const children = parent.children.map(child => child.path === childMap.path
-        ? { ...child, bytes: childMap.bytes, files: childMap.files, modifiedAt: childMap.modifiedAt, sizeKnown: childMap.sizeKnown, sizeComplete: childMap.sizeComplete, sizeStale: false }
+        ? { ...child, bytes: childMap.bytes, files: childMap.files, modifiedAt: childMap.modifiedAt, sizeKnown: childMap.sizeKnown, sizeComplete: childMap.sizeComplete, sizeStale: false, deltaBytes: childMap.deltaBytes, deltaKnown: childMap.deltaKnown, deltaSince: childMap.deltaSince }
         : child);
+      const oldChild = parent.children.find(child => child.path === childMap.path);
+      const deltaKnown = parent.deltaKnown && oldChild?.deltaKnown && childMap.deltaKnown;
       const measured = children.every(child => child.sizeComplete === true);
       childMap = {
         ...parent,
@@ -552,6 +585,8 @@ export default function App() {
         measured,
         sizeKnown: true,
         sizeComplete: measured,
+        deltaBytes: deltaKnown ? Number(parent.deltaBytes || 0) + Number(childMap.deltaBytes || 0) - Number(oldChild.deltaBytes || 0) : parent.deltaBytes,
+        deltaKnown,
         modifiedAt: children.reduce((latest, child) => !latest || Date.parse(child.modifiedAt || '') > Date.parse(latest) ? child.modifiedAt : latest, ''),
       };
       mapCacheRef.current.set(parent.path, childMap);
@@ -1017,21 +1052,16 @@ export default function App() {
         <section className="map-header">
           <div>
             <h1>{viewData?.name || '디스크 지도'}</h1>
-            <p>{viewData?.virtual
-              ? `${bytes(viewData.bytes)} · ${Number(viewData.groupedCount || 0).toLocaleString()}개 항목`
-              : viewData ? viewData.sizeComplete
-              ? `${bytes(viewData.bytes)} · ${viewData.files.toLocaleString()}개 파일 · ${viewData.directories.toLocaleString()}개 폴더`
-              : `${bytes(viewData.bytes)} 확인된 용량`
-              : '용량을 면적으로, 최근 변경 시점을 색으로 표시합니다.'}</p>
+            <p>{mapSummaryLabel(viewData)}</p>
           </div>
           <div className="legend" aria-label="색상 범례">
-            <span className="age-now">7일</span><span className="age-month">30일</span><span className="age-half">6개월</span><span className="age-year">1년</span><span className="age-old">오래됨</span>
+            <span className="delta-grown-4">증가</span><span className="delta-neutral">변화 없음</span><span className="delta-shrunk-4">감소</span><span className="delta-unknown">기준 없음</span>
           </div>
         </section>
 
         <section className={`map-stage ${loading ? 'loading' : ''}`}>
           {viewData && <Treemap data={viewData} selected={selected} onSelect={setSelected} onBack={goBack} onHover={setHovered} onPrefetch={prefetchMap} onOpen={openCell} />}
-          {hovered && <div className="map-hover-card" role="status"><strong>{hovered.name}</strong><span>{sizeLabel(hovered)} · {modifiedLabel(hovered.modifiedAt)}</span><small>{hovered.virtual ? `${hovered.groupedCount}개 합산 · 가상 폴더` : hovered.path}</small>{hovered.directory && <em>더블 클릭 또는 Enter로 열기</em>}</div>}
+          {hovered && <div className="map-hover-card" role="status"><strong>{hovered.name}</strong><span>{sizeLabel(hovered)} · {deltaSummaryLabel(hovered)} · {modifiedLabel(hovered.modifiedAt)}</span><small>{hovered.virtual ? `${hovered.groupedCount}개 합산 · 가상 폴더` : hovered.path}</small>{hovered.directory && <em>더블 클릭 또는 Enter로 열기</em>}</div>}
           {!data && !loading && <div className="first-run"><strong>분석할 위치를 선택하세요</strong><span>선택한 폴더와 하위 폴더의 용량 지도를 엽니다.</span><button onClick={selectScanRoot} disabled={choosingRoot}>{choosingRoot ? '선택 중…' : '폴더 선택'}</button></div>}
           {loading && <div className="map-loading" role="status" aria-live="polite"><span className="loading-spinner" /><span>{loadingText}</span>{scanning && progress?.path && <small>{progress.path}</small>}</div>}
         </section>
@@ -1043,7 +1073,7 @@ export default function App() {
           {selected && <div className="selection-panel">
             <div className="selection-line">
               <strong title={selected.path}>{selected.virtual ? selected.name : selected.path}</strong>
-              <span>{sizeLabel(selected)} · {modifiedLabel(selected.modifiedAt)}</span>
+              <span title={deltaSummaryLabel(selected)}>{sizeLabel(selected)} · {deltaValueLabel(selected)} · {modifiedLabel(selected.modifiedAt)}</span>
               {!selected.virtual && <button className="reveal-path" onClick={() => revealPath(selected.path)}>{revealButtonLabel}</button>}
               {selected.symlink
                 ? <span className="selection-blocked">심볼릭 링크는 이동할 수 없음</span>

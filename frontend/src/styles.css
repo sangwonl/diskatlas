@@ -79,12 +79,16 @@ button { font: inherit; }
 .map-hover-card span { color: #d5e1e5; font-size: 12px; }
 .map-hover-card small { overflow: hidden; color: #9aaab2; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .map-hover-card em { color: var(--accent); font-size: 10px; font-style: normal; }
-.age-now { background: #227d62; }
-.age-month { background: #4f8357; }
-.age-half { background: #85803e; }
-.age-year { background: #94633b; }
-.age-old { background: #6c4850; }
-.size-unknown { background: #59656d; }
+.delta-grown-1 { background: #63333a; }
+.delta-grown-2 { background: #81363e; }
+.delta-grown-3 { background: #a83e46; }
+.delta-grown-4 { background: #cf4c54; }
+.delta-shrunk-1 { background: #20483d; }
+.delta-shrunk-2 { background: #24654d; }
+.delta-shrunk-3 { background: #287f5b; }
+.delta-shrunk-4 { background: #329b6b; }
+.delta-neutral { background: #465159; }
+.delta-unknown { background: #303a40; }
 .inspector { position: relative; z-index: 20; display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 12px; width: 100%; min-width: 0; height: 56px; min-height: 56px; max-height: 56px; overflow: visible; padding-top: 7px; color: var(--muted); font-size: 12px; }
 .scan-status { max-width: 220px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pulse { display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--accent); border-radius: 50%; animation: pulse 1s infinite alternate; }

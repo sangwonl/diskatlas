@@ -361,6 +361,9 @@ export namespace core {
 	    name: string;
 	    path: string;
 	    bytes: number;
+	    deltaBytes: number;
+	    deltaKnown: boolean;
+	    deltaSince?: string;
 	    files: number;
 	    modifiedAt?: string;
 	    directory: boolean;
@@ -380,6 +383,9 @@ export namespace core {
 	        this.name = source["name"];
 	        this.path = source["path"];
 	        this.bytes = source["bytes"];
+	        this.deltaBytes = source["deltaBytes"];
+	        this.deltaKnown = source["deltaKnown"];
+	        this.deltaSince = source["deltaSince"];
 	        this.files = source["files"];
 	        this.modifiedAt = source["modifiedAt"];
 	        this.directory = source["directory"];
@@ -396,6 +402,9 @@ export namespace core {
 	    path: string;
 	    name: string;
 	    bytes: number;
+	    deltaBytes: number;
+	    deltaKnown: boolean;
+	    deltaSince?: string;
 	    files: number;
 	    directories: number;
 	    modifiedAt?: string;
@@ -415,6 +424,9 @@ export namespace core {
 	        this.path = source["path"];
 	        this.name = source["name"];
 	        this.bytes = source["bytes"];
+	        this.deltaBytes = source["deltaBytes"];
+	        this.deltaKnown = source["deltaKnown"];
+	        this.deltaSince = source["deltaSince"];
 	        this.files = source["files"];
 	        this.directories = source["directories"];
 	        this.modifiedAt = source["modifiedAt"];
