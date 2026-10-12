@@ -87,10 +87,25 @@ button { font: inherit; }
 .delta-shrunk-2 { background: #24654d; }
 .delta-shrunk-3 { background: #287f5b; }
 .delta-shrunk-4 { background: #329b6b; }
-.delta-neutral { background: #465159; }
+.delta-neutral { background: #65747c; }
+.delta-activity-grown-1 { background: #63333a; }
+.delta-activity-grown-2 { background: #81363e; }
+.delta-activity-grown-3 { background: #a83e46; }
+.delta-activity-grown-4 { background: #cf4c54; }
+.delta-activity-shrunk-1 { background: #20483d; }
+.delta-activity-shrunk-2 { background: #24654d; }
+.delta-activity-shrunk-3 { background: #287f5b; }
+.delta-activity-shrunk-4 { background: #329b6b; }
+.delta-activity-mixed { background: #6d5b83; }
+.delta-activity { color: #fff; background: #6d5b83; }
 .delta-unknown { background: #303a40; }
+.legend .delta-neutral, .legend .delta-unknown { color: #f4f7f8; }
 .inspector { position: relative; z-index: 20; display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 12px; width: 100%; min-width: 0; height: 56px; min-height: 56px; max-height: 56px; overflow: visible; padding-top: 7px; color: var(--muted); font-size: 12px; }
-.scan-status { max-width: 220px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scan-status { display: flex; align-items: center; gap: 8px; max-width: 290px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.scan-status-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scan-cancel { flex: 0 0 auto; padding: 3px 7px; color: #cbd5da; background: transparent; border: 1px solid var(--line); border-radius: 5px; font-size: 10px; cursor: pointer; }
+.scan-cancel:hover { color: #fff; background: rgba(255,255,255,.07); }
+.scan-cancel:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .pulse { display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--accent); border-radius: 50%; animation: pulse 1s infinite alternate; }
 .selection-panel { display: grid; gap: 5px; min-width: 0; padding: 3px 0; }
 .selection-line { display: flex; align-items: center; gap: 8px; min-width: 0; }

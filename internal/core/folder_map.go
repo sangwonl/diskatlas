@@ -20,18 +20,21 @@ import (
 // FolderMap describes one directory level and the measured sizes of its
 // immediate children. Deeper levels are only listed when the user opens them.
 type FolderMap struct {
-	Root        string `json:"root"`
-	Path        string `json:"path"`
-	Name        string `json:"name"`
-	Bytes       int64  `json:"bytes"`
-	DeltaBytes  int64  `json:"deltaBytes"`
-	DeltaKnown  bool   `json:"deltaKnown"`
-	DeltaSince  string `json:"deltaSince,omitempty"`
-	Files       int    `json:"files"`
-	Directories int    `json:"directories"`
-	ModifiedAt  string `json:"modifiedAt,omitempty"`
-	GeneratedAt string `json:"generatedAt,omitempty"`
-	Measured    bool   `json:"measured"`
+	Root               string `json:"root"`
+	Path               string `json:"path"`
+	Name               string `json:"name"`
+	Bytes              int64  `json:"bytes"`
+	DeltaBytes         int64  `json:"deltaBytes"`
+	DeltaKnown         bool   `json:"deltaKnown"`
+	DeltaSince         string `json:"deltaSince,omitempty"`
+	DeltaGrowthBytes   int64  `json:"deltaGrowthBytes"`
+	DeltaShrinkBytes   int64  `json:"deltaShrinkBytes"`
+	DeltaActivityKnown bool   `json:"deltaActivityKnown"`
+	Files              int    `json:"files"`
+	Directories        int    `json:"directories"`
+	ModifiedAt         string `json:"modifiedAt,omitempty"`
+	GeneratedAt        string `json:"generatedAt,omitempty"`
+	Measured           bool   `json:"measured"`
 	// SizeKnown means Bytes is a usable lower bound; SizeComplete means the
 	// walk read every path and did not skip a separate-volume subtree.
 	SizeKnown    bool             `json:"sizeKnown"`
@@ -40,16 +43,19 @@ type FolderMap struct {
 }
 
 type FolderMapEntry struct {
-	Name       string `json:"name"`
-	Path       string `json:"path"`
-	Bytes      int64  `json:"bytes"`
-	DeltaBytes int64  `json:"deltaBytes"`
-	DeltaKnown bool   `json:"deltaKnown"`
-	DeltaSince string `json:"deltaSince,omitempty"`
-	Files      int    `json:"files"`
-	ModifiedAt string `json:"modifiedAt,omitempty"`
-	Directory  bool   `json:"directory"`
-	Symlink    bool   `json:"symlink"`
+	Name               string `json:"name"`
+	Path               string `json:"path"`
+	Bytes              int64  `json:"bytes"`
+	DeltaBytes         int64  `json:"deltaBytes"`
+	DeltaKnown         bool   `json:"deltaKnown"`
+	DeltaSince         string `json:"deltaSince,omitempty"`
+	DeltaGrowthBytes   int64  `json:"deltaGrowthBytes"`
+	DeltaShrinkBytes   int64  `json:"deltaShrinkBytes"`
+	DeltaActivityKnown bool   `json:"deltaActivityKnown"`
+	Files              int    `json:"files"`
+	ModifiedAt         string `json:"modifiedAt,omitempty"`
+	Directory          bool   `json:"directory"`
+	Symlink            bool   `json:"symlink"`
 	// Incomplete directories retain their readable byte total as a lower bound.
 	SizeKnown    bool  `json:"sizeKnown"`
 	SizeComplete bool  `json:"sizeComplete"`
@@ -61,21 +67,25 @@ type FolderMapEntry struct {
 const folderMapIndexVersion = 1
 
 type folderMapAggregate struct {
-	Bytes            int64
-	BaselineBytes    int64
-	BaselineKnown    bool
-	BaselineComplete bool
-	BaselineAt       time.Time
-	DeltaBytes       int64
-	DeltaKnown       bool
-	DeltaSince       time.Time
-	Files            int
-	ModifiedAt       string
-	Known            bool
-	Complete         bool
-	StatModTime      int64
-	StatSize         int64
-	ScannedAt        time.Time
+	Bytes              int64
+	BaselineBytes      int64
+	BaselineKnown      bool
+	BaselineComplete   bool
+	BaselineAt         time.Time
+	DeltaBytes         int64
+	DeltaKnown         bool
+	DeltaSince         time.Time
+	DeltaGrowthBytes   int64
+	DeltaShrinkBytes   int64
+	DeltaActivityKnown bool
+	Files              int
+	ModifiedAt         string
+	Known              bool
+	Complete           bool
+	SizeStale          bool
+	StatModTime        int64
+	StatSize           int64
+	ScannedAt          time.Time
 }
 
 type folderMapAggregateIndex struct {
@@ -100,10 +110,6 @@ func ReadFolderMap(root, target string) (*FolderMap, error) {
 		return nil, err
 	}
 	previous, _ := loadStoredFolderMapSnapshot(normalizedRoot, normalizedTarget)
-	rootAggregate := loadFolderMapAggregates(normalizedRoot, []string{normalizedRoot})[normalizedRoot]
-	if !folderMapHasComparisonBaseline(rootAggregate) {
-		previous = nil
-	}
 	if cached, ok := loadFolderMapSnapshot(normalizedRoot, normalizedTarget); ok {
 		applyFolderMapAggregates(cached)
 		applyFolderMapDeltas(cached, previous, false)
@@ -126,10 +132,6 @@ func ReloadFolderMap(root, target string) (*FolderMap, error) {
 		return nil, err
 	}
 	previous, _ := loadStoredFolderMapSnapshot(normalizedRoot, normalizedTarget)
-	rootAggregate := loadFolderMapAggregates(normalizedRoot, []string{normalizedRoot})[normalizedRoot]
-	if !folderMapHasComparisonBaseline(rootAggregate) {
-		previous = nil
-	}
 	result, err := readFolderMapLevel(normalizedRoot, normalizedTarget)
 	if err != nil {
 		return nil, err
@@ -162,9 +164,6 @@ func MeasureFolderMapContext(ctx context.Context, root, target string, force boo
 	previousSnapshot, _ := loadStoredFolderMapSnapshot(normalizedRoot, normalizedTarget)
 	rootAggregate := loadFolderMapAggregates(normalizedRoot, []string{normalizedRoot})[normalizedRoot]
 	hasPreviousBaseline := folderMapHasComparisonBaseline(rootAggregate)
-	if !hasPreviousBaseline {
-		previousSnapshot = nil
-	}
 	seedFolderMapBaselineSnapshot(previousSnapshot)
 	var result *FolderMap
 	if !force {
@@ -230,6 +229,7 @@ func MeasureFolderMapContext(ctx context.Context, root, target string, force boo
 	}
 	if jobCount > 0 {
 		report(normalizedTarget, true)
+		parallelSlots := make(chan struct{}, workers)
 		workersDone.Add(workers)
 		for worker := 0; worker < workers; worker++ {
 			go func() {
@@ -242,12 +242,18 @@ func MeasureFolderMapContext(ctx context.Context, root, target string, force boo
 						if !ok {
 							return
 						}
+						select {
+						case parallelSlots <- struct{}{}:
+						case <-ctx.Done():
+							return
+						}
 						entry := result.Children[index]
-						measured, measureErr := measureFolderEntry(ctx, normalizedRoot, entry.Path, rootAggregate, snapshotBatch, func(path string) {
+						measured, measureErr := measureFolderEntry(ctx, normalizedRoot, entry.Path, rootAggregate, snapshotBatch, parallelSlots, func(path string) {
 							if scanned.Add(1)%128 == 0 {
 								report(path, false)
 							}
 						})
+						<-parallelSlots
 						if measureErr != nil {
 							return
 						}
@@ -259,6 +265,9 @@ func MeasureFolderMapContext(ctx context.Context, root, target string, force boo
 						}
 						entry.SizeKnown = measured.Known
 						entry.SizeComplete = measured.Complete
+						entry.DeltaGrowthBytes = measured.DeltaGrowthBytes
+						entry.DeltaShrinkBytes = measured.DeltaShrinkBytes
+						entry.DeltaActivityKnown = measured.DeltaActivityKnown
 						result.Children[index] = entry
 						if !measured.Complete {
 							resultsMu.Lock()
@@ -308,12 +317,15 @@ func MeasureFolderMapContext(ctx context.Context, root, target string, force boo
 	result.SizeKnown = true
 	result.SizeComplete = allMeasured
 	result.GeneratedAt = time.Now().UTC().Format(time.RFC3339)
+	applyFolderMapDeltas(result, previousSnapshot, advanceBaseline)
+	result.DeltaGrowthBytes, result.DeltaShrinkBytes, result.DeltaActivityKnown = folderMapDeltaActivity(result.Children, previousSnapshot)
 	aggregatesStored := false
 	rootInfo, rootErr := os.Lstat(normalizedTarget)
 	if rootErr == nil {
 		measurementTime := time.Now()
 		rootAggregate := folderMapAggregate{
 			Bytes: result.Bytes, Files: result.Files, ModifiedAt: result.ModifiedAt,
+			DeltaGrowthBytes: result.DeltaGrowthBytes, DeltaShrinkBytes: result.DeltaShrinkBytes, DeltaActivityKnown: result.DeltaActivityKnown,
 			Known: true, Complete: result.SizeComplete,
 			StatModTime: rootInfo.ModTime().UnixNano(), StatSize: rootInfo.Size(), ScannedAt: measurementTime,
 		}
@@ -331,7 +343,7 @@ func MeasureFolderMapContext(ctx context.Context, root, target string, force boo
 		aggregatesStored = true
 	}
 	applyFolderMapAggregates(result)
-	applyFolderMapDeltas(result, previousSnapshot, advanceBaseline && result.SizeComplete)
+	applyFolderMapDeltas(result, previousSnapshot, advanceBaseline)
 	if jobCount > 0 {
 		report(normalizedTarget, true)
 	}
@@ -339,7 +351,7 @@ func MeasureFolderMapContext(ctx context.Context, root, target string, force boo
 		return nil, err
 	}
 	if snapshotBatch != nil {
-		commitBaseline := advanceBaseline && result.SizeComplete && aggregatesStored
+		commitBaseline := advanceBaseline && aggregatesStored
 		stageErr := snapshotBatch.stage(result, true, commitBaseline)
 		if stageErr == nil && ctx.Err() == nil {
 			if commitErr := snapshotBatch.commit(commitBaseline); commitErr == nil && commitBaseline {
@@ -442,15 +454,18 @@ func readFolderMapLevel(root, target string) (*FolderMap, error) {
 }
 
 type measuredFolder struct {
-	Bytes      int64
-	DeltaBytes int64
-	DeltaKnown bool
-	DeltaSince string
-	Files      int
-	ModifiedAt string
-	Known      bool
-	Complete   bool
-	Aggregates map[string]folderMapAggregate
+	Bytes              int64
+	DeltaBytes         int64
+	DeltaKnown         bool
+	DeltaSince         string
+	DeltaGrowthBytes   int64
+	DeltaShrinkBytes   int64
+	DeltaActivityKnown bool
+	Files              int
+	ModifiedAt         string
+	Known              bool
+	Complete           bool
+	Aggregates         map[string]folderMapAggregate
 }
 
 type folderMapSnapshotBatch struct {
@@ -565,30 +580,27 @@ func (batch *folderMapSnapshotBatch) cleanup() {
 	}
 }
 
-func measureFolderEntry(ctx context.Context, scanRoot, path string, rootBaseline folderMapAggregate, snapshots *folderMapSnapshotBatch, onEntry func(string)) (measuredFolder, error) {
+func measureFolderEntry(ctx context.Context, scanRoot, path string, rootBaseline folderMapAggregate, snapshots *folderMapSnapshotBatch, parallelSlots chan struct{}, onEntry func(string)) (measuredFolder, error) {
 	if err := ctx.Err(); err != nil {
 		return measuredFolder{}, err
 	}
-	rootInfo, rootErr := os.Stat(path)
+	rootInfo, rootErr := os.Lstat(path)
 	if rootErr != nil {
 		return measuredFolder{Aggregates: map[string]folderMapAggregate{
 			path: {Known: false, Complete: false, ScannedAt: time.Now()},
 		}}, nil
 	}
 	rootDevice := filesystemIdentity(path, rootInfo)
-	return measureFolderTree(ctx, scanRoot, path, rootDevice, rootBaseline, snapshots, onEntry)
+	return measureFolderTree(ctx, scanRoot, path, rootDevice, rootBaseline, snapshots, rootInfo, parallelSlots, onEntry)
 }
 
-func measureFolderTree(ctx context.Context, scanRoot, path, rootDevice string, rootBaseline folderMapAggregate, snapshots *folderMapSnapshotBatch, onEntry func(string)) (measuredFolder, error) {
+func measureFolderTree(ctx context.Context, scanRoot, path, rootDevice string, rootBaseline folderMapAggregate, snapshots *folderMapSnapshotBatch, info os.FileInfo, parallelSlots chan struct{}, onEntry func(string)) (measuredFolder, error) {
 	if err := ctx.Err(); err != nil {
 		return measuredFolder{}, err
 	}
 	now := time.Now()
 	previousSnapshot, _ := loadStoredFolderMapSnapshot(scanRoot, path)
 	previousAggregate, hasPreviousAggregate := loadFolderMapAggregates(scanRoot, []string{path})[path]
-	if !folderMapHasComparisonBaseline(rootBaseline) {
-		previousSnapshot = nil
-	}
 	if previousSnapshot == nil && !hasPreviousAggregate && folderMapHasComparisonBaseline(rootBaseline) {
 		baselineAt := rootBaseline.BaselineAt
 		if baselineAt.IsZero() {
@@ -610,8 +622,7 @@ func measureFolderTree(ctx context.Context, scanRoot, path, rootDevice string, r
 	if path == string(filepath.Separator) {
 		snapshot.Name = path
 	}
-	info, err := os.Lstat(path)
-	if err != nil {
+	if info == nil || !info.IsDir() {
 		result.Known = false
 		result.Complete = false
 		result.Aggregates[path] = folderMapAggregate{Known: false, Complete: false, ScannedAt: now}
@@ -626,9 +637,15 @@ func measureFolderTree(ctx context.Context, scanRoot, path, rootDevice string, r
 		}
 		return result, nil
 	}
-	for _, entry := range entries {
-		if err := ctx.Err(); err != nil {
-			return measuredFolder{}, err
+	children := make([]FolderMapEntry, len(entries))
+	includeChild := make([]bool, len(entries))
+	measurements := make([]measuredFolder, len(entries))
+	measurementErrors := make([]error, len(entries))
+	measuredDirectory := make([]bool, len(entries))
+	var childrenDone sync.WaitGroup
+	for index, entry := range entries {
+		if ctx.Err() != nil {
+			break
 		}
 		childPath := filepath.Join(path, entry.Name())
 		childInfo, statErr := os.Lstat(childPath)
@@ -651,12 +668,48 @@ func measureFolderTree(ctx context.Context, scanRoot, path, rootDevice string, r
 				}
 				childEntry.SizeKnown = false
 				childEntry.SizeComplete = false
-				snapshot.Children = append(snapshot.Children, childEntry)
+				children[index] = childEntry
+				includeChild[index] = true
 				continue
 			}
-			child, childErr := measureFolderTree(ctx, scanRoot, childPath, rootDevice, rootBaseline, snapshots, onEntry)
-			if childErr != nil {
-				return measuredFolder{}, childErr
+			children[index] = childEntry
+			includeChild[index] = true
+			measuredDirectory[index] = true
+			select {
+			case parallelSlots <- struct{}{}:
+				childrenDone.Add(1)
+				go func(index int, childPath string, childInfo os.FileInfo) {
+					defer childrenDone.Done()
+					defer func() { <-parallelSlots }()
+					measurements[index], measurementErrors[index] = measureFolderTree(ctx, scanRoot, childPath, rootDevice, rootBaseline, snapshots, childInfo, parallelSlots, onEntry)
+				}(index, childPath, childInfo)
+			default:
+				measurements[index], measurementErrors[index] = measureFolderTree(ctx, scanRoot, childPath, rootDevice, rootBaseline, snapshots, childInfo, parallelSlots, onEntry)
+			}
+			continue
+		}
+		childEntry.Bytes = allocatedSize(childInfo)
+		childEntry.Files = 1
+		childEntry.SizeKnown = true
+		childEntry.SizeComplete = true
+		children[index] = childEntry
+		includeChild[index] = true
+		if onEntry != nil {
+			onEntry(childPath)
+		}
+	}
+	childrenDone.Wait()
+	if err := ctx.Err(); err != nil {
+		return measuredFolder{}, err
+	}
+	for index, childEntry := range children {
+		if !includeChild[index] {
+			continue
+		}
+		if measuredDirectory[index] {
+			child := measurements[index]
+			if measurementErrors[index] != nil {
+				return measuredFolder{}, measurementErrors[index]
 			}
 			childEntry.Bytes = child.Bytes
 			childEntry.Files = child.Files
@@ -665,40 +718,23 @@ func measureFolderTree(ctx context.Context, scanRoot, path, rootDevice string, r
 			childEntry.DeltaBytes = child.DeltaBytes
 			childEntry.DeltaKnown = child.DeltaKnown
 			childEntry.DeltaSince = child.DeltaSince
+			childEntry.DeltaGrowthBytes = child.DeltaGrowthBytes
+			childEntry.DeltaShrinkBytes = child.DeltaShrinkBytes
+			childEntry.DeltaActivityKnown = child.DeltaActivityKnown
 			if child.ModifiedAt != "" {
 				childEntry.ModifiedAt = child.ModifiedAt
 			}
-			result.Bytes += child.Bytes
-			result.Files += child.Files
 			result.Complete = result.Complete && child.Complete
-			if child.ModifiedAt > result.ModifiedAt {
-				result.ModifiedAt = child.ModifiedAt
-			}
 			for aggregatePath, aggregate := range child.Aggregates {
 				result.Aggregates[aggregatePath] = aggregate
 			}
-			snapshot.Children = append(snapshot.Children, childEntry)
-			continue
 		}
-		childEntry.Bytes = allocatedSize(childInfo)
-		childEntry.Files = 1
-		childEntry.SizeKnown = true
-		childEntry.SizeComplete = true
 		result.Bytes += childEntry.Bytes
-		result.Files++
-		modified := childEntry.ModifiedAt
-		if modified > result.ModifiedAt {
-			result.ModifiedAt = modified
+		result.Files += childEntry.Files
+		if childEntry.ModifiedAt > result.ModifiedAt {
+			result.ModifiedAt = childEntry.ModifiedAt
 		}
 		snapshot.Children = append(snapshot.Children, childEntry)
-		if onEntry != nil {
-			onEntry(childPath)
-		}
-	}
-	result.Aggregates[path] = folderMapAggregate{
-		Bytes: result.Bytes, Files: result.Files, ModifiedAt: result.ModifiedAt,
-		Known: true, Complete: result.Complete,
-		StatModTime: info.ModTime().UnixNano(), StatSize: info.Size(), ScannedAt: now,
 	}
 	snapshot.Bytes = result.Bytes
 	snapshot.Files = result.Files
@@ -710,7 +746,27 @@ func measureFolderTree(ctx context.Context, scanRoot, path, rootDevice string, r
 	sortFolderMapEntries(snapshot.Children)
 	resetUnchanged := snapshots != nil && snapshots.baselineDirectory != ""
 	applyFolderMapDeltas(snapshot, previousSnapshot, resetUnchanged)
-	if !snapshot.DeltaKnown && hasPreviousAggregate && previousAggregate.Known && previousAggregate.Complete && result.Known && result.Complete && folderMapHasComparisonBaseline(rootBaseline) {
+	snapshot.DeltaGrowthBytes, snapshot.DeltaShrinkBytes, snapshot.DeltaActivityKnown = folderMapDeltaActivity(snapshot.Children, previousSnapshot)
+	result.DeltaGrowthBytes = snapshot.DeltaGrowthBytes
+	result.DeltaShrinkBytes = snapshot.DeltaShrinkBytes
+	result.DeltaActivityKnown = snapshot.DeltaActivityKnown
+	result.Aggregates[path] = folderMapAggregate{
+		Bytes: result.Bytes, Files: result.Files, ModifiedAt: result.ModifiedAt,
+		DeltaGrowthBytes: result.DeltaGrowthBytes, DeltaShrinkBytes: result.DeltaShrinkBytes, DeltaActivityKnown: result.DeltaActivityKnown,
+		Known: true, Complete: result.Complete,
+		StatModTime: info.ModTime().UnixNano(), StatSize: info.Size(), ScannedAt: now,
+	}
+	if previousSnapshot != nil && previousSnapshot.SizeKnown && previousSnapshot.SizeComplete {
+		if baselineAt, parseErr := time.Parse(time.RFC3339, previousSnapshot.GeneratedAt); parseErr == nil {
+			aggregate := result.Aggregates[path]
+			aggregate.BaselineBytes = previousSnapshot.Bytes
+			aggregate.BaselineKnown = true
+			aggregate.BaselineComplete = true
+			aggregate.BaselineAt = baselineAt
+			result.Aggregates[path] = aggregate
+		}
+	}
+	if !snapshot.DeltaKnown && hasPreviousAggregate && previousAggregate.Known && previousAggregate.Complete && result.Known && result.Complete && folderMapHasComparisonBaseline(previousAggregate) {
 		baselineBytes := previousAggregate.Bytes
 		baselineAt := previousAggregate.ScannedAt
 		if previousAggregate.BaselineKnown {
@@ -769,9 +825,12 @@ func applyFolderMapAggregates(snapshot *FolderMap) bool {
 		entry.ModifiedAt = aggregate.ModifiedAt
 		entry.SizeKnown = aggregate.Known
 		entry.SizeComplete = aggregate.Complete
-		entry.SizeStale = aggregate.StatModTime != entry.StatModTime || aggregate.StatSize != entry.StatSize
+		entry.SizeStale = aggregate.SizeStale || aggregate.StatModTime != entry.StatModTime || aggregate.StatSize != entry.StatSize
 		entry.DeltaBytes = aggregate.DeltaBytes
 		entry.DeltaKnown = aggregate.DeltaKnown && !entry.SizeStale
+		entry.DeltaGrowthBytes = aggregate.DeltaGrowthBytes
+		entry.DeltaShrinkBytes = aggregate.DeltaShrinkBytes
+		entry.DeltaActivityKnown = aggregate.DeltaActivityKnown
 		if !aggregate.DeltaSince.IsZero() {
 			entry.DeltaSince = aggregate.DeltaSince.UTC().Format(time.RFC3339)
 		}
@@ -798,12 +857,19 @@ func applyFolderMapAggregates(snapshot *FolderMap) bool {
 		snapshot.GeneratedAt = rootAggregate.ScannedAt.UTC().Format(time.RFC3339)
 		snapshot.DeltaBytes = rootAggregate.DeltaBytes
 		snapshot.DeltaKnown = rootAggregate.DeltaKnown && snapshot.SizeComplete
+		snapshot.DeltaGrowthBytes = rootAggregate.DeltaGrowthBytes
+		snapshot.DeltaShrinkBytes = rootAggregate.DeltaShrinkBytes
+		snapshot.DeltaActivityKnown = rootAggregate.DeltaActivityKnown
 		if !rootAggregate.DeltaSince.IsZero() {
 			snapshot.DeltaSince = rootAggregate.DeltaSince.UTC().Format(time.RFC3339)
 		}
 		if !snapshot.DeltaKnown {
 			snapshot.DeltaBytes = 0
 			snapshot.DeltaSince = ""
+		}
+		if !snapshot.DeltaActivityKnown {
+			snapshot.DeltaGrowthBytes = 0
+			snapshot.DeltaShrinkBytes = 0
 		}
 	} else if !latestScan.IsZero() {
 		snapshot.Measured = false
@@ -898,12 +964,12 @@ func storeFolderMapAggregates(root, target string, aggregates map[string]folderM
 	for path, aggregate := range aggregates {
 		previous, exists := index.Directories[path]
 		switch {
-		case previous.BaselineKnown:
+		case previous.BaselineKnown && previous.BaselineComplete:
 			aggregate.BaselineBytes = previous.BaselineBytes
 			aggregate.BaselineKnown = true
 			aggregate.BaselineComplete = previous.BaselineComplete
 			aggregate.BaselineAt = previous.BaselineAt
-		case exists && previous.Known && previous.Complete && rootBaselineKnown:
+		case exists && previous.Known && previous.Complete:
 			// Seed an older aggregate index from its last measured value.
 			aggregate.BaselineBytes = previous.Bytes
 			aggregate.BaselineKnown = true
@@ -930,6 +996,7 @@ func storeFolderMapAggregates(root, target string, aggregates map[string]folderM
 	previous, hadPrevious := index.Directories[target]
 	current, hasCurrent := aggregates[target]
 	canPropagate := hasCurrent && current.Known && current.Complete
+	canPropagateActivity := hasCurrent && current.DeltaActivityKnown
 	byteDelta, fileDelta := int64(0), 0
 	if canPropagate {
 		if hadPrevious && previous.Known && previous.Complete {
@@ -950,29 +1017,57 @@ func storeFolderMapAggregates(root, target string, aggregates map[string]folderM
 	}
 	for ancestor := filepath.Dir(target); isWithin(root, ancestor) && ancestor != target; ancestor = filepath.Dir(ancestor) {
 		if aggregate, exists := index.Directories[ancestor]; exists {
-			if canPropagate {
-				if rootBaselineKnown && !aggregate.BaselineKnown && aggregate.Known && aggregate.Complete {
-					// Migrate this ancestor from the pre-baseline aggregate index.
-					aggregate.BaselineBytes = aggregate.Bytes
-					aggregate.BaselineKnown = true
-					aggregate.BaselineComplete = true
-					aggregate.BaselineAt = aggregate.ScannedAt
-				}
-				aggregate.Bytes += byteDelta
-				aggregate.Files += fileDelta
-				if aggregate.BaselineKnown && aggregate.BaselineComplete && aggregate.Known && aggregate.Complete {
-					aggregate.DeltaBytes = aggregate.Bytes - aggregate.BaselineBytes
-					aggregate.DeltaKnown = true
-					aggregate.DeltaSince = aggregate.BaselineAt
+			if canPropagate || canPropagateActivity {
+				canPropagateBytes := canPropagate && aggregate.Complete
+				if canPropagateBytes {
+					if rootBaselineKnown && !aggregate.BaselineKnown && aggregate.Known && aggregate.Complete {
+						// Migrate this ancestor from the pre-baseline aggregate index.
+						aggregate.BaselineBytes = aggregate.Bytes
+						aggregate.BaselineKnown = true
+						aggregate.BaselineComplete = true
+						aggregate.BaselineAt = aggregate.ScannedAt
+					}
+					aggregate.Bytes += byteDelta
+					aggregate.Files += fileDelta
+					if aggregate.BaselineKnown && aggregate.BaselineComplete && aggregate.Known && aggregate.Complete {
+						aggregate.DeltaBytes = aggregate.Bytes - aggregate.BaselineBytes
+						aggregate.DeltaKnown = true
+						aggregate.DeltaSince = aggregate.BaselineAt
+					} else {
+						aggregate.DeltaBytes = 0
+						aggregate.DeltaKnown = false
+						aggregate.DeltaSince = time.Time{}
+					}
 				} else {
+					aggregate.Complete = false
+					aggregate.SizeStale = true
 					aggregate.DeltaBytes = 0
 					aggregate.DeltaKnown = false
 					aggregate.DeltaSince = time.Time{}
 				}
+				if canPropagateActivity && (current.DeltaGrowthBytes > 0 || current.DeltaShrinkBytes > 0) && !aggregate.DeltaActivityKnown {
+					aggregate.DeltaGrowthBytes = current.DeltaGrowthBytes
+					aggregate.DeltaShrinkBytes = current.DeltaShrinkBytes
+					aggregate.DeltaActivityKnown = true
+				} else if canPropagateActivity && (!hadPrevious || previous.DeltaActivityKnown) && aggregate.DeltaActivityKnown {
+					previousGrowth, previousShrink := int64(0), int64(0)
+					if hadPrevious {
+						previousGrowth = previous.DeltaGrowthBytes
+						previousShrink = previous.DeltaShrinkBytes
+					}
+					aggregate.DeltaGrowthBytes += current.DeltaGrowthBytes - previousGrowth
+					aggregate.DeltaShrinkBytes += current.DeltaShrinkBytes - previousShrink
+				} else {
+					aggregate.DeltaGrowthBytes = 0
+					aggregate.DeltaShrinkBytes = 0
+					aggregate.DeltaActivityKnown = false
+				}
 				if current.ModifiedAt > aggregate.ModifiedAt {
 					aggregate.ModifiedAt = current.ModifiedAt
 				}
-				aggregate.Complete = aggregate.Complete && current.Complete
+				if canPropagateBytes {
+					aggregate.Complete = aggregate.Complete && current.Complete
+				}
 				aggregate.ScannedAt = current.ScannedAt
 				index.Directories[ancestor] = aggregate
 			} else {
@@ -1015,22 +1110,26 @@ func advanceFolderMapAggregateBaseline(root string, initialize bool) error {
 		return errors.New("폴더 측정 인덱스가 없습니다")
 	}
 	rootAggregate, exists := index.Directories[root]
-	if !exists || !rootAggregate.Known || !rootAggregate.Complete || rootAggregate.ScannedAt.IsZero() {
-		return errors.New("전체 폴더 측정이 완료되지 않았습니다")
+	if !exists || !rootAggregate.Known || rootAggregate.ScannedAt.IsZero() {
+		return errors.New("폴더 측정 결과가 없습니다")
 	}
 	for path, aggregate := range index.Directories {
 		if !isWithin(root, path) {
 			continue
 		}
 		if aggregate.Known && aggregate.Complete {
+			firstBaseline := !aggregate.BaselineKnown || !aggregate.BaselineComplete
 			aggregate.BaselineBytes = aggregate.Bytes
 			aggregate.BaselineKnown = true
 			aggregate.BaselineComplete = true
 			aggregate.BaselineAt = rootAggregate.ScannedAt
-			if initialize {
+			if initialize && firstBaseline {
 				aggregate.DeltaBytes = 0
 				aggregate.DeltaKnown = true
 				aggregate.DeltaSince = rootAggregate.ScannedAt
+				aggregate.DeltaGrowthBytes = 0
+				aggregate.DeltaShrinkBytes = 0
+				aggregate.DeltaActivityKnown = true
 			}
 		} else {
 			aggregate.BaselineComplete = false
@@ -1207,6 +1306,56 @@ func applyFolderMapDeltas(snapshot, previous *FolderMap, resetUnchanged bool) {
 			entry.DeltaSince = previous.GeneratedAt
 		}
 	}
+}
+
+func folderMapDeltaActivity(entries []FolderMapEntry, previous *FolderMap) (growth, shrink int64, known bool) {
+	known = previous != nil && previous.SizeKnown && previous.SizeComplete
+	currentPaths := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		currentPaths[entry.Path] = struct{}{}
+		if entry.Directory {
+			if entry.DeltaActivityKnown {
+				growth += entry.DeltaGrowthBytes
+				shrink += entry.DeltaShrinkBytes
+				continue
+			}
+			// A complete directory may have a known net delta even when its
+			// older snapshot lacks the gross activity fields.
+			if entry.DeltaKnown {
+				if entry.DeltaBytes > 0 {
+					growth += entry.DeltaBytes
+				} else if entry.DeltaBytes < 0 {
+					shrink -= entry.DeltaBytes
+				}
+				continue
+			}
+			known = false
+			continue
+		}
+		if !entry.DeltaKnown {
+			known = false
+			continue
+		}
+		if entry.DeltaBytes > 0 {
+			growth += entry.DeltaBytes
+		} else if entry.DeltaBytes < 0 {
+			shrink -= entry.DeltaBytes
+		}
+	}
+	if previous != nil {
+		for _, entry := range previous.Children {
+			if _, exists := currentPaths[entry.Path]; exists {
+				continue
+			}
+			if !entry.SizeKnown || !entry.SizeComplete {
+				known = false
+				continue
+			}
+			shrink += entry.Bytes
+		}
+	}
+	known = known || growth > 0 || shrink > 0
+	return growth, shrink, known
 }
 
 // Check the cached layer's direct entries before using it. Deep changes are

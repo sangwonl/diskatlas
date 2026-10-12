@@ -220,6 +220,9 @@ func (a *App) RefreshFolderMap(path, requestID string) (*core.FolderMap, error) 
 }
 
 func (a *App) measureFolderMap(path, requestID string, refresh bool) (*core.FolderMap, error) {
+	endActivity := beginFolderMapActivity()
+	defer endActivity()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	if requestID != "" {
 		a.folderMapMu.Lock()

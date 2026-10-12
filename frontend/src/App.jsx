@@ -38,7 +38,7 @@ function deltaValueLabel(item) {
   if (!item?.deltaKnown) return '비교 기준 없음';
   const delta = Number(item.deltaBytes || 0);
   if (delta === 0) return '변화 없음';
-  return `${delta > 0 ? '+' : '−'}${bytes(Math.abs(delta))}`;
+  return `${delta > 0 ? '+' : '-'}${bytes(Math.abs(delta))}`;
 }
 
 function deltaSummaryLabel(item) {
@@ -50,15 +50,61 @@ function deltaSummaryLabel(item) {
   return `${label} 대비 ${deltaValueLabel(item)}`;
 }
 
+function deltaActivityLabel(item) {
+  if (!hasDeltaActivity(item)) return '';
+  if (item.sizeComplete === false || item.sizeStale) return '하위 변화 확인됨';
+  return '내부 변화';
+}
+
+function hasDeltaActivity(item) {
+  if (!item?.deltaActivityKnown) return false;
+  return Number(item.deltaGrowthBytes || 0) > 0 || Number(item.deltaShrinkBytes || 0) > 0;
+}
+
+function hasMixedDeltaActivity(item) {
+  return item?.deltaActivityKnown === true
+    && Number(item.deltaGrowthBytes || 0) > 0
+    && Number(item.deltaShrinkBytes || 0) > 0;
+}
+
 function deltaColorClass(item) {
-  if (!item?.deltaKnown || item.sizeKnown === false || item.sizeComplete === false) return 'delta-unknown';
-  const delta = Number(item.deltaBytes || 0);
-  if (delta === 0) return 'delta-neutral';
-  const magnitude = Math.abs(delta);
-  const tier = magnitude < 16 * 1024 ** 2 ? 1
+  const activityGrowth = Number(item?.deltaGrowthBytes || 0);
+  const activityShrink = Number(item?.deltaShrinkBytes || 0);
+  const hasActivity = item?.deltaActivityKnown === true && (activityGrowth > 0 || activityShrink > 0);
+  const completeDeltaKnown = item?.deltaKnown === true && item.sizeKnown !== false && item.sizeComplete !== false;
+
+  if (completeDeltaKnown) {
+    const delta = Number(item.deltaBytes || 0);
+    if (delta === 0 && hasActivity && activityGrowth > 0 && activityShrink > 0) return 'delta-activity-mixed';
+    if (delta === 0 && hasActivity && activityGrowth > 0) return activityColorClass(activityGrowth, 'grown');
+    if (delta === 0 && hasActivity && activityShrink > 0) return activityColorClass(activityShrink, 'shrunk');
+    if (delta === 0) return 'delta-neutral';
+    return deltaMagnitudeClass(delta);
+  }
+
+  if (hasActivity) {
+    if (activityGrowth > 0 && activityShrink > 0) return 'delta-activity-mixed';
+    return activityGrowth > 0
+      ? activityColorClass(activityGrowth, 'grown')
+      : activityColorClass(activityShrink, 'shrunk');
+  }
+  return 'delta-unknown';
+}
+
+function activityColorClass(magnitude, direction) {
+  const tier = deltaMagnitudeTier(magnitude);
+  return `delta-activity-${direction}-${tier}`;
+}
+
+function deltaMagnitudeClass(delta) {
+  const tier = deltaMagnitudeTier(Math.abs(delta));
+  return `${delta > 0 ? 'delta-grown' : 'delta-shrunk'}-${tier}`;
+}
+
+function deltaMagnitudeTier(magnitude) {
+  return magnitude < 16 * 1024 ** 2 ? 1
     : magnitude < 128 * 1024 ** 2 ? 2
       : magnitude < 1024 ** 3 ? 3 : 4;
-  return `${delta > 0 ? 'delta-grown' : 'delta-shrunk'}-${tier}`;
 }
 
 function mapSummaryLabel(item) {
@@ -68,7 +114,8 @@ function mapSummaryLabel(item) {
     : item.sizeComplete
       ? `${bytes(item.bytes)} · ${item.files.toLocaleString()}개 파일 · ${item.directories.toLocaleString()}개 폴더`
       : `${bytes(item.bytes)} 확인된 용량`;
-  return `${size} · ${deltaSummaryLabel(item)}`;
+  const activity = deltaActivityLabel(item);
+  return `${size} · ${deltaSummaryLabel(item)}${activity ? ` · ${activity}` : ''}`;
 }
 
 function sizeLabel(item) {
@@ -307,6 +354,9 @@ function createVirtualGroup(rows, direct, virtualDepth) {
     deltaBytes: sortedSmall.reduce((sum, row) => sum + Number(row.deltaBytes || 0), 0),
     deltaKnown: sortedSmall.every(row => row.deltaKnown === true),
     deltaSince: sortedSmall.every(row => row.deltaSince === representative.deltaSince) ? representative.deltaSince : '',
+    deltaGrowthBytes: sortedSmall.reduce((sum, row) => sum + Number(row.deltaGrowthBytes || 0), 0),
+    deltaShrinkBytes: sortedSmall.reduce((sum, row) => sum + Number(row.deltaShrinkBytes || 0), 0),
+    deltaActivityKnown: sortedSmall.some(row => hasDeltaActivity(row)),
     layoutBytes: Math.min(scaledBytes, maxVisualBytes),
     files: sortedSmall.reduce((sum, row) => sum + Number(row.files || 1), 0),
     modifiedAt: sortedSmall.reduce((latest, row) => (!latest || Date.parse(row.modifiedAt || '') > Date.parse(latest)) ? row.modifiedAt : latest, ''),
@@ -435,10 +485,10 @@ function Treemap({ data, selected, onSelect, onOpen, onBack, onHover, onPrefetch
             onMouseLeave={() => onHover(null)}
             onFocus={() => { onHover(cell); onSelect(cell); }}
             onBlur={() => onHover(null)}
-            title={`${cell.virtual ? cell.name : cell.path}\n${sizeLabel(cell)} · ${deltaSummaryLabel(cell)} · ${modifiedLabel(cell.modifiedAt)}`}
+            title={`${cell.virtual ? cell.name : cell.path}\n${sizeLabel(cell)} · ${deltaSummaryLabel(cell)}${deltaActivityLabel(cell) ? ` · ${deltaActivityLabel(cell)}` : ''} · ${modifiedLabel(cell.modifiedAt)}`}
           >
             {density >= 1 && <span className="cell-name">{cell.name}</span>}
-            {density >= 2 && <span className="cell-size">{`${sizeLabel(cell)}${cell.virtual && cell.groupedCount > 1 ? ` · ${cell.groupedCount}개` : ''}${density >= 3 && cell.deltaKnown ? ` · ${deltaValueLabel(cell)}` : ''}`}</span>}
+            {density >= 2 && <span className="cell-size">{`${sizeLabel(cell)}${cell.virtual && cell.groupedCount > 1 ? ` · ${cell.groupedCount}개` : ''}${density >= 3 && cell.deltaKnown ? ` / ${deltaValueLabel(cell)}` : ''}`}</span>}
             {density >= 3 && <span className="cell-date">{modifiedLabel(cell.modifiedAt)}</span>}
           </button>
         );
@@ -481,6 +531,19 @@ export default function App() {
     if (!requestID) return;
     activeProgressRequestRef.current = '';
     cancelFolderMap(requestID).catch(() => {});
+  };
+
+  const cancelFolderScan = () => {
+    const wasLoading = loading;
+    cancelActiveFolderMeasurement();
+    loadRequestRef.current += 1;
+    setLoading(false);
+    setRefreshing(false);
+    setScanning(false);
+    setProgress(null);
+    if (wasLoading && data?.path) {
+      setHistory(stack => stack.at(-1) === data.path ? stack.slice(0, -1) : stack);
+    }
   };
 
   useEffect(() => {
@@ -572,10 +635,27 @@ export default function App() {
       const parent = mapCacheRef.current.get(path);
       if (!parent) return;
       const children = parent.children.map(child => child.path === childMap.path
-        ? { ...child, bytes: childMap.bytes, files: childMap.files, modifiedAt: childMap.modifiedAt, sizeKnown: childMap.sizeKnown, sizeComplete: childMap.sizeComplete, sizeStale: false, deltaBytes: childMap.deltaBytes, deltaKnown: childMap.deltaKnown, deltaSince: childMap.deltaSince }
+        ? {
+          ...child,
+          bytes: childMap.bytes,
+          files: childMap.files,
+          modifiedAt: childMap.modifiedAt,
+          sizeKnown: childMap.sizeKnown,
+          sizeComplete: childMap.sizeComplete,
+          sizeStale: false,
+          deltaBytes: childMap.deltaBytes,
+          deltaKnown: childMap.deltaKnown,
+          deltaSince: childMap.deltaSince,
+          deltaGrowthBytes: childMap.deltaGrowthBytes,
+          deltaShrinkBytes: childMap.deltaShrinkBytes,
+          deltaActivityKnown: childMap.deltaActivityKnown,
+        }
         : child);
       const oldChild = parent.children.find(child => child.path === childMap.path);
       const deltaKnown = parent.deltaKnown && oldChild?.deltaKnown && childMap.deltaKnown;
+      const deltaActivityExact = parent.deltaActivityKnown && oldChild?.deltaActivityKnown && childMap.deltaActivityKnown;
+      const childHasActivity = hasDeltaActivity(childMap);
+      const deltaActivityKnown = deltaActivityExact || childHasActivity;
       const measured = children.every(child => child.sizeComplete === true);
       childMap = {
         ...parent,
@@ -587,6 +667,13 @@ export default function App() {
         sizeComplete: measured,
         deltaBytes: deltaKnown ? Number(parent.deltaBytes || 0) + Number(childMap.deltaBytes || 0) - Number(oldChild.deltaBytes || 0) : parent.deltaBytes,
         deltaKnown,
+        deltaGrowthBytes: deltaActivityExact
+          ? Number(parent.deltaGrowthBytes || 0) + Number(childMap.deltaGrowthBytes || 0) - Number(oldChild.deltaGrowthBytes || 0)
+          : childHasActivity ? Number(childMap.deltaGrowthBytes || 0) : 0,
+        deltaShrinkBytes: deltaActivityExact
+          ? Number(parent.deltaShrinkBytes || 0) + Number(childMap.deltaShrinkBytes || 0) - Number(oldChild.deltaShrinkBytes || 0)
+          : childHasActivity ? Number(childMap.deltaShrinkBytes || 0) : 0,
+        deltaActivityKnown,
         modifiedAt: children.reduce((latest, child) => !latest || Date.parse(child.modifiedAt || '') > Date.parse(latest) ? child.modifiedAt : latest, ''),
       };
       mapCacheRef.current.set(parent.path, childMap);
@@ -1055,25 +1142,28 @@ export default function App() {
             <p>{mapSummaryLabel(viewData)}</p>
           </div>
           <div className="legend" aria-label="색상 범례">
-            <span className="delta-grown-4">증가</span><span className="delta-neutral">변화 없음</span><span className="delta-shrunk-4">감소</span><span className="delta-unknown">기준 없음</span>
+            <span className="delta-grown-4">증가</span><span className="delta-neutral">변화 없음</span><span className="delta-shrunk-4">감소</span><span className="delta-activity">하위 변화</span><span className="delta-unknown">기준 없음</span>
           </div>
         </section>
 
         <section className={`map-stage ${loading ? 'loading' : ''}`}>
           {viewData && <Treemap data={viewData} selected={selected} onSelect={setSelected} onBack={goBack} onHover={setHovered} onPrefetch={prefetchMap} onOpen={openCell} />}
-          {hovered && <div className="map-hover-card" role="status"><strong>{hovered.name}</strong><span>{sizeLabel(hovered)} · {deltaSummaryLabel(hovered)} · {modifiedLabel(hovered.modifiedAt)}</span><small>{hovered.virtual ? `${hovered.groupedCount}개 합산 · 가상 폴더` : hovered.path}</small>{hovered.directory && <em>더블 클릭 또는 Enter로 열기</em>}</div>}
+          {hovered && <div className="map-hover-card" role="status"><strong>{hovered.name}</strong><span>{sizeLabel(hovered)} · {deltaSummaryLabel(hovered)}{deltaActivityLabel(hovered) ? ` · ${deltaActivityLabel(hovered)}` : ''} · {modifiedLabel(hovered.modifiedAt)}</span><small>{hovered.virtual ? `${hovered.groupedCount}개 합산 · 가상 폴더` : hovered.path}</small>{hovered.directory && <em>더블 클릭 또는 Enter로 열기</em>}</div>}
           {!data && !loading && <div className="first-run"><strong>분석할 위치를 선택하세요</strong><span>선택한 폴더와 하위 폴더의 용량 지도를 엽니다.</span><button onClick={selectScanRoot} disabled={choosingRoot}>{choosingRoot ? '선택 중…' : '폴더 선택'}</button></div>}
           {loading && <div className="map-loading" role="status" aria-live="polite"><span className="loading-spinner" /><span>{loadingText}</span>{scanning && progress?.path && <small>{progress.path}</small>}</div>}
         </section>
 
         <footer className={`inspector${selected ? ' has-selection' : ''}`}>
           <div className="scan-status">
-            {scanning ? <><span className="pulse" /> 폴더 크기 계산 중</> : viewData ? `${visibleItems.toLocaleString()}개 항목` : null}
+            {scanning ? <>
+              <span className="scan-status-label"><span className="pulse" />폴더 크기 계산 중 · {scanCount.toLocaleString()}개 확인</span>
+              <button type="button" className="scan-cancel" onClick={cancelFolderScan}>취소</button>
+            </> : viewData ? `${visibleItems.toLocaleString()}개 항목` : null}
           </div>
           {selected && <div className="selection-panel">
             <div className="selection-line">
               <strong title={selected.path}>{selected.virtual ? selected.name : selected.path}</strong>
-              <span title={deltaSummaryLabel(selected)}>{sizeLabel(selected)} · {deltaValueLabel(selected)} · {modifiedLabel(selected.modifiedAt)}</span>
+              <span title={`${deltaSummaryLabel(selected)}${deltaActivityLabel(selected) ? ` · ${deltaActivityLabel(selected)}` : ''}`}>{sizeLabel(selected)} · {deltaValueLabel(selected)}{deltaActivityLabel(selected) ? ` · ${deltaActivityLabel(selected)}` : ''} · {modifiedLabel(selected.modifiedAt)}</span>
               {!selected.virtual && <button className="reveal-path" onClick={() => revealPath(selected.path)}>{revealButtonLabel}</button>}
               {selected.symlink
                 ? <span className="selection-blocked">심볼릭 링크는 이동할 수 없음</span>

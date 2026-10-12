@@ -364,6 +364,9 @@ export namespace core {
 	    deltaBytes: number;
 	    deltaKnown: boolean;
 	    deltaSince?: string;
+	    deltaGrowthBytes: number;
+	    deltaShrinkBytes: number;
+	    deltaActivityKnown: boolean;
 	    files: number;
 	    modifiedAt?: string;
 	    directory: boolean;
@@ -386,6 +389,9 @@ export namespace core {
 	        this.deltaBytes = source["deltaBytes"];
 	        this.deltaKnown = source["deltaKnown"];
 	        this.deltaSince = source["deltaSince"];
+	        this.deltaGrowthBytes = source["deltaGrowthBytes"];
+	        this.deltaShrinkBytes = source["deltaShrinkBytes"];
+	        this.deltaActivityKnown = source["deltaActivityKnown"];
 	        this.files = source["files"];
 	        this.modifiedAt = source["modifiedAt"];
 	        this.directory = source["directory"];
@@ -405,6 +411,9 @@ export namespace core {
 	    deltaBytes: number;
 	    deltaKnown: boolean;
 	    deltaSince?: string;
+	    deltaGrowthBytes: number;
+	    deltaShrinkBytes: number;
+	    deltaActivityKnown: boolean;
 	    files: number;
 	    directories: number;
 	    modifiedAt?: string;
@@ -427,6 +436,9 @@ export namespace core {
 	        this.deltaBytes = source["deltaBytes"];
 	        this.deltaKnown = source["deltaKnown"];
 	        this.deltaSince = source["deltaSince"];
+	        this.deltaGrowthBytes = source["deltaGrowthBytes"];
+	        this.deltaShrinkBytes = source["deltaShrinkBytes"];
+	        this.deltaActivityKnown = source["deltaActivityKnown"];
 	        this.files = source["files"];
 	        this.directories = source["directories"];
 	        this.modifiedAt = source["modifiedAt"];
