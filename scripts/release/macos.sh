@@ -68,12 +68,29 @@ if [[ "$channel" == "app-store" ]]; then
   exit 0
 fi
 
+# Ticket delivery can fail transiently even after notarization succeeds.
+retry_stapler() {
+  local attempt status
+  for attempt in 1 2 3 4 5; do
+    if xcrun stapler "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+    if [[ "$status" -ne 68 || "$attempt" -eq 5 ]]; then
+      return "$status"
+    fi
+    echo "Apple ticket delivery failed; retrying stapler in $((attempt * 10)) seconds ($attempt/5)." >&2
+    sleep "$((attempt * 10))"
+  done
+}
+
 notary_input="$(mktemp -d "${TMPDIR:-/tmp}/diskatlas-notary.XXXXXX")"
 trap 'rm -rf "$notary_input"' EXIT
 ditto -c -k --keepParent "$app" "$notary_input/DiskAtlas.zip"
 xcrun notarytool submit "$notary_input/DiskAtlas.zip" --keychain-profile "$MAC_NOTARY_PROFILE" --wait
-xcrun stapler staple "$app"
-xcrun stapler validate "$app"
+retry_stapler staple "$app"
+retry_stapler validate "$app"
 
 zip="$output/DiskAtlas-$version-macOS-universal.zip"
 dmg="$output/DiskAtlas-$version-macOS-universal.dmg"
@@ -83,8 +100,8 @@ hdiutil create -volname "DiskAtlas" -srcfolder "$app" -ov -format UDZO "$dmg"
 codesign --force --timestamp --identifier "$DISKATLAS_BUNDLE_ID.disk-image" --sign "$MAC_APP_IDENTITY" "$dmg"
 codesign --verify --verbose=2 "$dmg"
 xcrun notarytool submit "$dmg" --keychain-profile "$MAC_NOTARY_PROFILE" --wait
-xcrun stapler staple "$dmg"
-xcrun stapler validate "$dmg"
+retry_stapler staple "$dmg"
+retry_stapler validate "$dmg"
 echo "Notarized direct-distribution builds created:"
 echo "  $zip"
 echo "  $dmg"

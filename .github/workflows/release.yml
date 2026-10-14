@@ -165,16 +165,29 @@ jobs:
       - name: Install NSIS
         shell: pwsh
         run: |
-          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
-            choco install nsis -y --no-progress
-          }
           $nsisDirectory = Join-Path ${env:ProgramFiles(x86)} 'NSIS'
-          if (Test-Path (Join-Path $nsisDirectory 'makensis.exe')) {
-            $nsisDirectory >> $env:GITHUB_PATH
+          $nsisExecutable = Join-Path $nsisDirectory 'makensis.exe'
+          # Runner images may already include NSIS without putting it on PATH.
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue) -and -not (Test-Path $nsisExecutable)) {
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              choco install nsis -y --no-progress
+              $installExitCode = $LASTEXITCODE
+              if ($installExitCode -eq 0 -and (Test-Path $nsisExecutable)) { break }
+              if ($attempt -eq 3) {
+                throw "NSIS installation failed after 3 attempts (Chocolatey exit code $installExitCode)."
+              }
+              Start-Sleep -Seconds (10 * $attempt)
+            }
           }
-          if (-not (Get-Command makensis -ErrorAction SilentlyContinue) -and -not (Test-Path (Join-Path $nsisDirectory 'makensis.exe'))) {
+          if (Test-Path $nsisExecutable) {
+            $nsisDirectory >> $env:GITHUB_PATH
+            $env:PATH = "$nsisDirectory;$env:PATH"
+          }
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
             throw 'NSIS installation did not provide makensis.exe.'
           }
+          & makensis /VERSION
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS compiler could not run.' }
 
       - name: Build and sign Windows installer
         if: ${{ steps.windows-signing.outputs.enabled == 'true' }}
