@@ -10,8 +10,9 @@ import (
 )
 
 type TrashMoveResult struct {
-	EstimatedBytes     int64 `json:"estimatedBytes"`
-	PendingSizeTracked bool  `json:"pendingSizeTracked"`
+	MeasurementUpdateError string `json:"measurementUpdateError,omitempty"`
+	EstimatedBytes         int64  `json:"estimatedBytes"`
+	PendingSizeTracked     bool   `json:"pendingSizeTracked"`
 }
 
 type trashReceipt struct {
@@ -62,13 +63,14 @@ func MoveToTrash(root, target string, estimatedBytes int64) (TrashMoveResult, er
 		return result, err
 	}
 	result.EstimatedBytes = estimatedBytes
-	if trashedPath == "" {
-		return result, nil
+	if trashedPath != "" {
+		if err := addTrashReceipt(trashReceipt{TrashedPath: trashedPath, Volume: volume, Bytes: estimatedBytes}); err == nil {
+			result.PendingSizeTracked = true
+		}
 	}
-	if err := addTrashReceipt(trashReceipt{TrashedPath: trashedPath, Volume: volume, Bytes: estimatedBytes}); err != nil {
-		return result, nil
+	if err := recordFolderMapRemoval(cleanRoot, cleanTarget); err != nil {
+		result.MeasurementUpdateError = err.Error()
 	}
-	result.PendingSizeTracked = true
 	return result, nil
 }
 

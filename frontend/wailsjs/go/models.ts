@@ -513,6 +513,7 @@ export namespace core {
 	
 	
 	export class TrashMoveResult {
+	    measurementUpdateError?: string;
 	    estimatedBytes: number;
 	    pendingSizeTracked: boolean;
 	
@@ -522,6 +523,7 @@ export namespace core {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.measurementUpdateError = source["measurementUpdateError"];
 	        this.estimatedBytes = source["estimatedBytes"];
 	        this.pendingSizeTracked = source["pendingSizeTracked"];
 	    }

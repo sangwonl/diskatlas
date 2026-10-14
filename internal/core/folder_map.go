@@ -1,11 +1,7 @@
 package core
 
 import (
-	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/gob"
-	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -86,6 +82,8 @@ type folderMapAggregate struct {
 	StatModTime        int64
 	StatSize           int64
 	ScannedAt          time.Time
+	Journal            journalCursor
+	JournalDevice      string
 }
 
 type folderMapAggregateIndex struct {
@@ -95,9 +93,13 @@ type folderMapAggregateIndex struct {
 }
 
 type folderMapIndexStore struct {
-	mu     sync.RWMutex
-	loaded bool
-	index  *folderMapAggregateIndex
+	refreshMu      sync.Mutex
+	mu             sync.RWMutex
+	loaded         bool
+	index          *folderMapAggregateIndex
+	live           map[string]folderMapAggregate
+	scanRoot       bool
+	scanBaselineAt time.Time
 }
 
 var folderMapIndexStores sync.Map
@@ -110,6 +112,15 @@ func ReadFolderMap(root, target string) (*FolderMap, error) {
 		return nil, err
 	}
 	previous, _ := loadStoredFolderMapSnapshot(normalizedRoot, normalizedTarget)
+	if folderMapScanActive(normalizedRoot) {
+		result, err := readFolderMapLevel(normalizedRoot, normalizedTarget)
+		if err != nil {
+			return nil, err
+		}
+		applyFolderMapAggregates(result)
+		applyFolderMapDeltas(result, previous, false)
+		return result, nil
+	}
 	if cached, ok := loadFolderMapSnapshot(normalizedRoot, normalizedTarget); ok {
 		applyFolderMapAggregates(cached)
 		applyFolderMapDeltas(cached, previous, false)
@@ -138,9 +149,6 @@ func ReloadFolderMap(root, target string) (*FolderMap, error) {
 	}
 	applyFolderMapAggregates(result)
 	applyFolderMapDeltas(result, previous, false)
-	if result.GeneratedAt != "" {
-		_ = saveFolderMapSnapshot(result)
-	}
 	return result, nil
 }
 
@@ -161,10 +169,37 @@ func MeasureFolderMapContext(ctx context.Context, root, target string, force boo
 	if err != nil {
 		return nil, err
 	}
-	previousSnapshot, _ := loadStoredFolderMapSnapshot(normalizedRoot, normalizedTarget)
+	store := folderMapIndexStoreForRoot(normalizedRoot)
+	store.refreshMu.Lock()
+	defer store.refreshMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := openFolderMapDB(); err != nil {
+		return nil, err
+	}
 	rootAggregate := loadFolderMapAggregates(normalizedRoot, []string{normalizedRoot})[normalizedRoot]
-	hasPreviousBaseline := folderMapHasComparisonBaseline(rootAggregate)
-	seedFolderMapBaselineSnapshot(previousSnapshot)
+	isRootScan := filepath.Clean(normalizedTarget) == filepath.Clean(normalizedRoot)
+	scanBaselineAt := rootAggregate.DeltaSince
+	if isRootScan || scanBaselineAt.IsZero() {
+		scanBaselineAt = rootAggregate.BaselineAt
+	}
+	rootAggregate.BaselineAt = scanBaselineAt
+	previousSnapshot, _ := loadScanFolderMapSnapshot(normalizedRoot, normalizedTarget, isRootScan, scanBaselineAt)
+	hasPreviousBaseline := !scanBaselineAt.IsZero()
+	store.mu.RLock()
+	var originalIndex *folderMapAggregateIndex
+	if store.index != nil {
+		copyIndex := *store.index
+		copyIndex.Directories = make(map[string]folderMapAggregate, len(store.index.Directories))
+		for path, aggregate := range store.index.Directories {
+			copyIndex.Directories[path] = aggregate
+		}
+		originalIndex = &copyIndex
+	}
+	store.mu.RUnlock()
+	committed := false
+
 	var result *FolderMap
 	if !force {
 		if cached, ok := loadFolderMapSnapshot(normalizedRoot, normalizedTarget); ok {
@@ -180,9 +215,6 @@ func MeasureFolderMapContext(ctx context.Context, root, target string, force boo
 		targetAggregate, indexed := loadFolderMapAggregates(normalizedRoot, []string{normalizedTarget})[normalizedTarget]
 		if result.GeneratedAt != "" && (!indexed || targetAggregate.Known) {
 			applyFolderMapDeltas(result, previousSnapshot, false)
-			if result.SizeComplete {
-				_ = saveFolderMapSnapshot(result)
-			}
 			return result, nil
 		}
 	}
@@ -192,8 +224,31 @@ func MeasureFolderMapContext(ctx context.Context, root, target string, force boo
 			return nil, err
 		}
 	}
-	advanceBaseline := filepath.Clean(normalizedTarget) == filepath.Clean(normalizedRoot)
-	snapshotBatch, _ := newFolderMapSnapshotBatch(advanceBaseline)
+	refreshPlan, journalStart, journalDevice := prepareFolderMapRefresh(normalizedRoot, normalizedTarget, readFolderMapJournal)
+	store.mu.Lock()
+	store.live = make(map[string]folderMapAggregate)
+	store.scanRoot = isRootScan
+	store.scanBaselineAt = scanBaselineAt
+	store.mu.Unlock()
+	defer func() {
+		store.mu.Lock()
+		store.live = nil
+		if !committed {
+			store.index = originalIndex
+		}
+		store.mu.Unlock()
+	}()
+	initializeBaseline := !hasPreviousBaseline && previousSnapshot == nil && isRootScan
+	snapshotBatch, batchErr := newFolderMapSnapshotBatch(initializeBaseline)
+	if batchErr != nil {
+		return nil, batchErr
+	}
+	snapshotBatch.rootScan = isRootScan
+	snapshotBatch.previous = originalIndex
+	if refreshPlan != nil {
+		refreshPlan.rootScan = isRootScan
+		refreshPlan.baselineAt = scanBaselineAt
+	}
 	if snapshotBatch != nil {
 		defer snapshotBatch.cleanup()
 	}
@@ -212,6 +267,10 @@ func MeasureFolderMapContext(ctx context.Context, root, target string, force boo
 		lastReport = time.Now()
 		onProgress(Progress{Phase: "folder-map", FilesScanned: scanned.Load(), Path: path})
 	}
+	ctx, cancelScan := context.WithCancel(ctx)
+	defer cancelScan()
+	var measurementErr error
+	var measurementFailure sync.Once
 	jobs := make(chan int)
 	workers := min(runtime.GOMAXPROCS(0), 6)
 	if workers < 1 {
@@ -248,13 +307,14 @@ func MeasureFolderMapContext(ctx context.Context, root, target string, force boo
 							return
 						}
 						entry := result.Children[index]
-						measured, measureErr := measureFolderEntry(ctx, normalizedRoot, entry.Path, rootAggregate, snapshotBatch, parallelSlots, func(path string) {
+						measured, measureErr := measureFolderEntry(ctx, normalizedRoot, entry.Path, rootAggregate, snapshotBatch, refreshPlan, parallelSlots, func(path string) {
 							if scanned.Add(1)%128 == 0 {
 								report(path, false)
 							}
 						})
 						<-parallelSlots
 						if measureErr != nil {
+							measurementFailure.Do(func() { measurementErr = measureErr; cancelScan() })
 							return
 						}
 						measuredSubtrees[index] = measured
@@ -290,6 +350,9 @@ func MeasureFolderMapContext(ctx context.Context, root, target string, force boo
 		}
 		close(jobs)
 		workersDone.Wait()
+		if measurementErr != nil {
+			return nil, measurementErr
+		}
 	} else {
 		close(jobs)
 	}
@@ -317,59 +380,122 @@ func MeasureFolderMapContext(ctx context.Context, root, target string, force boo
 	result.SizeKnown = true
 	result.SizeComplete = allMeasured
 	result.GeneratedAt = time.Now().UTC().Format(time.RFC3339)
-	applyFolderMapDeltas(result, previousSnapshot, advanceBaseline)
+	applyFolderMapDeltas(result, previousSnapshot, initializeBaseline)
 	result.DeltaGrowthBytes, result.DeltaShrinkBytes, result.DeltaActivityKnown = folderMapDeltaActivity(result.Children, previousSnapshot)
 	aggregatesStored := false
+	var aggregates map[string]folderMapAggregate
 	rootInfo, rootErr := os.Lstat(normalizedTarget)
 	if rootErr == nil {
 		measurementTime := time.Now()
 		rootAggregate := folderMapAggregate{
 			Bytes: result.Bytes, Files: result.Files, ModifiedAt: result.ModifiedAt,
+			DeltaBytes: result.DeltaBytes, DeltaKnown: result.DeltaKnown,
 			DeltaGrowthBytes: result.DeltaGrowthBytes, DeltaShrinkBytes: result.DeltaShrinkBytes, DeltaActivityKnown: result.DeltaActivityKnown,
 			Known: true, Complete: result.SizeComplete,
 			StatModTime: rootInfo.ModTime().UnixNano(), StatSize: rootInfo.Size(), ScannedAt: measurementTime,
 		}
-		aggregates := map[string]folderMapAggregate{normalizedTarget: rootAggregate}
+		if result.DeltaSince != "" {
+			rootAggregate.DeltaSince, _ = time.Parse(time.RFC3339, result.DeltaSince)
+		}
+		if previousSnapshot != nil && previousSnapshot.SizeKnown && previousSnapshot.SizeComplete {
+			if baselineAt, parseErr := time.Parse(time.RFC3339, previousSnapshot.GeneratedAt); parseErr == nil {
+				rootAggregate.BaselineBytes = previousSnapshot.Bytes
+				rootAggregate.BaselineKnown = true
+				rootAggregate.BaselineComplete = true
+				rootAggregate.BaselineAt = baselineAt
+			}
+		}
+		aggregates = map[string]folderMapAggregate{normalizedTarget: rootAggregate}
 		for _, measured := range measuredSubtrees {
 			for path, aggregate := range measured.Aggregates {
-				aggregate.ScannedAt = measurementTime
+				if refreshPlan == nil {
+					aggregate.ScannedAt = measurementTime
+				} else if _, rescanned := refreshPlan.rescanned.Load(path); rescanned {
+					aggregate.ScannedAt = measurementTime
+				}
 				aggregates[path] = aggregate
 			}
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		storeFolderMapAggregates(normalizedRoot, normalizedTarget, aggregates)
+		for path, aggregate := range aggregates {
+			if refreshPlan == nil || path == normalizedTarget {
+				aggregate.Journal = journalStart
+				aggregate.JournalDevice = journalDevice
+			} else if _, rescanned := refreshPlan.rescanned.Load(path); rescanned {
+				aggregate.Journal = journalStart
+				aggregate.JournalDevice = journalDevice
+			}
+			aggregates[path] = aggregate
+		}
+		storeFolderMapAggregates(normalizedRoot, normalizedTarget, aggregates, refreshPlan)
 		aggregatesStored = true
 	}
 	applyFolderMapAggregates(result)
-	applyFolderMapDeltas(result, previousSnapshot, advanceBaseline)
+	applyFolderMapDeltas(result, previousSnapshot, initializeBaseline)
 	if jobCount > 0 {
 		report(normalizedTarget, true)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if snapshotBatch != nil {
-		commitBaseline := advanceBaseline && aggregatesStored
-		stageErr := snapshotBatch.stage(result, true, commitBaseline)
-		if stageErr == nil && ctx.Err() == nil {
-			if commitErr := snapshotBatch.commit(commitBaseline); commitErr == nil && commitBaseline {
-				if err := advanceFolderMapAggregateBaseline(normalizedRoot, !hasPreviousBaseline); err == nil && !hasPreviousBaseline {
-					applyFolderMapAggregates(result)
-					if baseline, ok := loadFolderMapBaselineSnapshot(normalizedRoot, normalizedTarget); ok {
-						applyFolderMapDeltas(result, baseline, false)
-					}
-					_ = saveFolderMapSnapshot(result)
-				}
-			}
-		}
-	} else {
-		_ = saveFolderMapSnapshot(result)
+	if !aggregatesStored {
+		return nil, errors.New("폴더 측정 결과를 저장할 수 없습니다")
 	}
-	if err := ctx.Err(); err != nil {
+	if initializeBaseline {
+		if err := advanceFolderMapAggregateBaseline(normalizedRoot, true); err != nil {
+			return nil, err
+		}
+		applyFolderMapAggregates(result)
+	}
+	if err := snapshotBatch.stage(result); err != nil {
 		return nil, err
 	}
+	if isRootScan && !initializeBaseline {
+		if err := advanceFolderMapAggregateBaseline(normalizedRoot, false); err != nil {
+			return nil, err
+		}
+	}
+	store.mu.Lock()
+	index := store.index
+	if !isRootScan && originalIndex != nil {
+		checkpointAt := originalIndex.Directories[normalizedRoot].BaselineAt
+		for path, aggregate := range index.Directories {
+			old, exists := originalIndex.Directories[path]
+			if exists {
+				aggregate.BaselineBytes = old.BaselineBytes
+				aggregate.BaselineKnown = old.BaselineKnown
+				aggregate.BaselineComplete = old.BaselineComplete
+			} else if !checkpointAt.IsZero() {
+				aggregate.BaselineBytes = 0
+				aggregate.BaselineKnown = true
+				aggregate.BaselineComplete = true
+			}
+			aggregate.BaselineAt = checkpointAt
+			index.Directories[path] = aggregate
+		}
+	}
+	checkpoint := index.Directories[normalizedRoot].BaselineAt
+	comparison := scanBaselineAt
+	if initializeBaseline {
+		comparison = checkpoint
+	}
+	// Root comparison metadata remains available even when permissions make the
+	// root total incomplete; readable children still share this comparison.
+	for path, aggregate := range index.Directories {
+		if aggregate.DeltaKnown || path == normalizedRoot {
+			aggregate.DeltaSince = comparison
+			index.Directories[path] = aggregate
+		}
+		store.live[path] = aggregate
+	}
+	store.mu.Unlock()
+	if err := snapshotBatch.commitScan(ctx, normalizedRoot, index, checkpoint, comparison); err != nil {
+		return nil, err
+	}
+	committed = true
+
 	return result, nil
 }
 
@@ -468,119 +594,7 @@ type measuredFolder struct {
 	Aggregates         map[string]folderMapAggregate
 }
 
-type folderMapSnapshotBatch struct {
-	mu                sync.Mutex
-	displayDirectory  string
-	baselineDirectory string
-	displayStaged     map[string]string
-	baselineStaged    map[string]string
-}
-
-func newFolderMapSnapshotBatch(withBaseline bool) (*folderMapSnapshotBatch, error) {
-	cacheRoot, err := os.UserCacheDir()
-	if err != nil {
-		return nil, err
-	}
-	displayDirectory := filepath.Join(cacheRoot, "shed", "folder-maps")
-	if err := os.MkdirAll(displayDirectory, 0o700); err != nil {
-		return nil, err
-	}
-	displayStaging, err := os.MkdirTemp(displayDirectory, ".folder-map-scan-*")
-	if err != nil {
-		return nil, err
-	}
-	batch := &folderMapSnapshotBatch{
-		displayDirectory: displayStaging,
-		displayStaged:    make(map[string]string),
-	}
-	if withBaseline {
-		baselineDirectory := filepath.Join(cacheRoot, "shed", "folder-map-baselines")
-		if err := os.MkdirAll(baselineDirectory, 0o700); err != nil {
-			_ = os.RemoveAll(displayStaging)
-			return nil, err
-		}
-		batch.baselineDirectory, err = os.MkdirTemp(baselineDirectory, ".folder-map-scan-*")
-		if err != nil {
-			_ = os.RemoveAll(displayStaging)
-			return nil, err
-		}
-		batch.baselineStaged = make(map[string]string)
-	}
-	return batch, nil
-}
-
-func (batch *folderMapSnapshotBatch) stage(snapshot *FolderMap, display, baseline bool) error {
-	if batch == nil || snapshot == nil {
-		return nil
-	}
-	var displayPath, displayStagedPath string
-	var baselinePath, baselineStagedPath string
-	if display {
-		var err error
-		displayPath, err = folderMapSnapshotPath(snapshot.Root, snapshot.Path)
-		if err != nil {
-			return err
-		}
-		displayStagedPath = filepath.Join(batch.displayDirectory, filepath.Base(displayPath))
-		if err := saveFolderMapSnapshotAtPath(snapshot, displayStagedPath); err != nil {
-			return err
-		}
-	}
-	if baseline && batch.baselineDirectory != "" {
-		var pathErr error
-		baselinePath, pathErr = folderMapBaselinePath(snapshot.Root, snapshot.Path)
-		if pathErr != nil {
-			return pathErr
-		}
-		baselineStagedPath := filepath.Join(batch.baselineDirectory, filepath.Base(baselinePath))
-		if err := saveFolderMapSnapshotAtPath(snapshot, baselineStagedPath); err != nil {
-			return err
-		}
-	}
-	batch.mu.Lock()
-	defer batch.mu.Unlock()
-	if display {
-		batch.displayStaged[displayPath] = displayStagedPath
-	}
-	if baseline && batch.baselineDirectory != "" {
-		batch.baselineStaged[baselinePath] = baselineStagedPath
-	}
-	return nil
-}
-
-func (batch *folderMapSnapshotBatch) commit(advanceBaseline bool) error {
-	if batch == nil {
-		return nil
-	}
-	batch.mu.Lock()
-	defer batch.mu.Unlock()
-	for path, stagedPath := range batch.displayStaged {
-		if err := os.Rename(stagedPath, path); err != nil {
-			return err
-		}
-	}
-	if advanceBaseline {
-		for path, stagedPath := range batch.baselineStaged {
-			if err := os.Rename(stagedPath, path); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (batch *folderMapSnapshotBatch) cleanup() {
-	if batch != nil {
-		batch.mu.Lock()
-		defer batch.mu.Unlock()
-		_ = os.RemoveAll(batch.displayDirectory)
-		if batch.baselineDirectory != "" {
-			_ = os.RemoveAll(batch.baselineDirectory)
-		}
-	}
-}
-
-func measureFolderEntry(ctx context.Context, scanRoot, path string, rootBaseline folderMapAggregate, snapshots *folderMapSnapshotBatch, parallelSlots chan struct{}, onEntry func(string)) (measuredFolder, error) {
+func measureFolderEntry(ctx context.Context, scanRoot, path string, rootBaseline folderMapAggregate, snapshots *folderMapSnapshotBatch, refreshPlan *folderMapRefreshPlan, parallelSlots chan struct{}, onEntry func(string)) (measuredFolder, error) {
 	if err := ctx.Err(); err != nil {
 		return measuredFolder{}, err
 	}
@@ -591,15 +605,21 @@ func measureFolderEntry(ctx context.Context, scanRoot, path string, rootBaseline
 		}}, nil
 	}
 	rootDevice := filesystemIdentity(path, rootInfo)
-	return measureFolderTree(ctx, scanRoot, path, rootDevice, rootBaseline, snapshots, rootInfo, parallelSlots, onEntry)
+	return measureFolderTree(ctx, scanRoot, path, rootDevice, rootBaseline, snapshots, refreshPlan, rootInfo, parallelSlots, onEntry)
 }
 
-func measureFolderTree(ctx context.Context, scanRoot, path, rootDevice string, rootBaseline folderMapAggregate, snapshots *folderMapSnapshotBatch, info os.FileInfo, parallelSlots chan struct{}, onEntry func(string)) (measuredFolder, error) {
+func measureFolderTree(ctx context.Context, scanRoot, path, rootDevice string, rootBaseline folderMapAggregate, snapshots *folderMapSnapshotBatch, refreshPlan *folderMapRefreshPlan, info os.FileInfo, parallelSlots chan struct{}, onEntry func(string)) (measuredFolder, error) {
 	if err := ctx.Err(); err != nil {
 		return measuredFolder{}, err
 	}
+	if cached, ok := refreshPlan.reuse(path, info); ok {
+		return cached, nil
+	}
+	if refreshPlan != nil {
+		refreshPlan.rescanned.Store(path, true)
+	}
 	now := time.Now()
-	previousSnapshot, _ := loadStoredFolderMapSnapshot(scanRoot, path)
+	previousSnapshot, _ := loadScanFolderMapSnapshot(scanRoot, path, snapshots != nil && snapshots.rootScan, rootBaseline.BaselineAt)
 	previousAggregate, hasPreviousAggregate := loadFolderMapAggregates(scanRoot, []string{path})[path]
 	if previousSnapshot == nil && !hasPreviousAggregate && folderMapHasComparisonBaseline(rootBaseline) {
 		baselineAt := rootBaseline.BaselineAt
@@ -612,7 +632,6 @@ func measureFolderTree(ctx context.Context, scanRoot, path, rootDevice string, r
 			SizeKnown:   true, SizeComplete: true, Children: []FolderMapEntry{},
 		}
 	}
-	seedFolderMapBaselineSnapshot(previousSnapshot)
 	result := measuredFolder{Known: true, Complete: true, Aggregates: make(map[string]folderMapAggregate)}
 	snapshot := &FolderMap{
 		Root: scanRoot, Path: path, Name: filepath.Base(path),
@@ -681,10 +700,10 @@ func measureFolderTree(ctx context.Context, scanRoot, path, rootDevice string, r
 				go func(index int, childPath string, childInfo os.FileInfo) {
 					defer childrenDone.Done()
 					defer func() { <-parallelSlots }()
-					measurements[index], measurementErrors[index] = measureFolderTree(ctx, scanRoot, childPath, rootDevice, rootBaseline, snapshots, childInfo, parallelSlots, onEntry)
+					measurements[index], measurementErrors[index] = measureFolderTree(ctx, scanRoot, childPath, rootDevice, rootBaseline, snapshots, refreshPlan, childInfo, parallelSlots, onEntry)
 				}(index, childPath, childInfo)
 			default:
-				measurements[index], measurementErrors[index] = measureFolderTree(ctx, scanRoot, childPath, rootDevice, rootBaseline, snapshots, childInfo, parallelSlots, onEntry)
+				measurements[index], measurementErrors[index] = measureFolderTree(ctx, scanRoot, childPath, rootDevice, rootBaseline, snapshots, refreshPlan, childInfo, parallelSlots, onEntry)
 			}
 			continue
 		}
@@ -744,7 +763,7 @@ func measureFolderTree(ctx context.Context, scanRoot, path, rootDevice string, r
 	snapshot.SizeKnown = result.Known
 	snapshot.SizeComplete = result.Complete
 	sortFolderMapEntries(snapshot.Children)
-	resetUnchanged := snapshots != nil && snapshots.baselineDirectory != ""
+	resetUnchanged := snapshots != nil && snapshots.initializeBaseline
 	applyFolderMapDeltas(snapshot, previousSnapshot, resetUnchanged)
 	snapshot.DeltaGrowthBytes, snapshot.DeltaShrinkBytes, snapshot.DeltaActivityKnown = folderMapDeltaActivity(snapshot.Children, previousSnapshot)
 	result.DeltaGrowthBytes = snapshot.DeltaGrowthBytes
@@ -780,8 +799,12 @@ func measureFolderTree(ctx context.Context, scanRoot, path, rootDevice string, r
 	result.DeltaBytes = snapshot.DeltaBytes
 	result.DeltaKnown = snapshot.DeltaKnown
 	result.DeltaSince = snapshot.DeltaSince
-	if result.Complete && snapshots != nil && snapshots.baselineDirectory != "" {
-		_ = snapshots.stage(snapshot, false, true)
+	publishFolderMapAggregate(scanRoot, path, result.Aggregates[path])
+	if snapshots != nil {
+		// Stage one database row; the scan publishes all rows together.
+		if err := snapshots.stage(snapshot); err != nil {
+			return measuredFolder{}, err
+		}
 	}
 	return result, nil
 }
@@ -793,7 +816,7 @@ func applyFolderMapAggregates(snapshot *FolderMap) bool {
 			paths = append(paths, entry.Path)
 		}
 	}
-	aggregates := loadFolderMapAggregates(snapshot.Root, paths)
+	aggregates, live := loadVisibleFolderMapAggregates(snapshot.Root, paths)
 	allCovered := true
 	var latestScan time.Time
 	allComplete := true
@@ -834,6 +857,11 @@ func applyFolderMapAggregates(snapshot *FolderMap) bool {
 		if !aggregate.DeltaSince.IsZero() {
 			entry.DeltaSince = aggregate.DeltaSince.UTC().Format(time.RFC3339)
 		}
+		if !entry.DeltaKnown && !entry.SizeStale && aggregate.Known && aggregate.Complete && aggregate.BaselineKnown && aggregate.BaselineComplete {
+			entry.DeltaBytes = aggregate.Bytes - aggregate.BaselineBytes
+			entry.DeltaKnown = true
+			entry.DeltaSince = aggregate.BaselineAt.UTC().Format(time.RFC3339)
+		}
 		if entry.SizeStale {
 			entry.DeltaBytes = 0
 			entry.DeltaSince = ""
@@ -851,6 +879,13 @@ func applyFolderMapAggregates(snapshot *FolderMap) bool {
 	}
 	rootAggregate, rootOK := aggregates[snapshot.Path]
 	if rootOK {
+		if !rootAggregate.DeltaKnown && allCovered && allComplete && rootAggregate.BaselineKnown && rootAggregate.BaselineComplete {
+			rootAggregate.DeltaBytes = snapshot.Bytes - rootAggregate.BaselineBytes
+			rootAggregate.DeltaKnown = true
+			rootAggregate.DeltaSince = rootAggregate.BaselineAt
+		} else if live && allCovered && allComplete && rootAggregate.Known && rootAggregate.Complete && rootAggregate.DeltaKnown {
+			rootAggregate.DeltaBytes += snapshot.Bytes - rootAggregate.Bytes
+		}
 		snapshot.Measured = allCovered && allComplete
 		snapshot.SizeKnown = rootAggregate.Known || anyKnown
 		snapshot.SizeComplete = allCovered && allComplete
@@ -906,43 +941,12 @@ func loadFolderMapAggregates(root string, paths []string) map[string]folderMapAg
 	return aggregates
 }
 
-func folderMapAggregateIndexPath(root string) (string, error) {
-	cacheRoot, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
-	key := sha256.Sum256([]byte("folder-map-index-v1\x00" + filepath.Clean(root)))
-	return filepath.Join(cacheRoot, "shed", "folder-maps", "index-"+hex.EncodeToString(key[:12])+".gob.gz"), nil
-}
-
 func folderMapIndexStoreForRoot(root string) *folderMapIndexStore {
 	value, _ := folderMapIndexStores.LoadOrStore(filepath.Clean(root), &folderMapIndexStore{})
 	return value.(*folderMapIndexStore)
 }
 
-func readFolderMapAggregateIndex(root string) *folderMapAggregateIndex {
-	path, err := folderMapAggregateIndexPath(root)
-	if err != nil {
-		return nil
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer file.Close()
-	reader, err := gzip.NewReader(file)
-	if err != nil {
-		return nil
-	}
-	defer reader.Close()
-	var index folderMapAggregateIndex
-	if err := gob.NewDecoder(reader).Decode(&index); err != nil || index.Version != folderMapIndexVersion || index.Root != root {
-		return nil
-	}
-	return &index
-}
-
-func storeFolderMapAggregates(root, target string, aggregates map[string]folderMapAggregate) {
+func storeFolderMapAggregates(root, target string, aggregates map[string]folderMapAggregate, refreshPlan *folderMapRefreshPlan) {
 	store := folderMapIndexStoreForRoot(root)
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -956,14 +960,29 @@ func storeFolderMapAggregates(root, target string, aggregates map[string]folderM
 		store.index = index
 	}
 	previousRoot := index.Directories[root]
-	rootBaselineKnown := folderMapHasComparisonBaseline(previousRoot)
+	rootBaselineKnown := !previousRoot.BaselineAt.IsZero()
+	rootScan := filepath.Clean(root) == filepath.Clean(target)
 	rootBaselineAt := previousRoot.BaselineAt
+	if !rootScan && !previousRoot.DeltaSince.IsZero() {
+		rootBaselineAt = previousRoot.DeltaSince
+	}
 	if rootBaselineAt.IsZero() {
 		rootBaselineAt = previousRoot.ScannedAt
 	}
 	for path, aggregate := range aggregates {
 		previous, exists := index.Directories[path]
 		switch {
+		case rootBaselineKnown:
+			if baselineBytes, ok := folderMapRootCheckpointBytes(root, path, previous, exists, rootBaselineAt, rootScan); ok {
+				aggregate.BaselineBytes = baselineBytes
+				aggregate.BaselineKnown = true
+				aggregate.BaselineComplete = true
+				aggregate.BaselineAt = rootBaselineAt
+			} else {
+				aggregate.BaselineKnown = false
+				aggregate.BaselineComplete = false
+				aggregate.BaselineAt = time.Time{}
+			}
 		case previous.BaselineKnown && previous.BaselineComplete:
 			aggregate.BaselineBytes = previous.BaselineBytes
 			aggregate.BaselineKnown = true
@@ -975,12 +994,6 @@ func storeFolderMapAggregates(root, target string, aggregates map[string]folderM
 			aggregate.BaselineKnown = true
 			aggregate.BaselineComplete = true
 			aggregate.BaselineAt = previous.ScannedAt
-		case !exists && rootBaselineKnown:
-			// A directory absent from a complete root baseline is newly created.
-			aggregate.BaselineBytes = 0
-			aggregate.BaselineKnown = true
-			aggregate.BaselineComplete = true
-			aggregate.BaselineAt = rootBaselineAt
 		}
 		if aggregate.BaselineKnown && aggregate.BaselineComplete && aggregate.Known && aggregate.Complete {
 			aggregate.DeltaBytes = aggregate.Bytes - aggregate.BaselineBytes
@@ -1014,18 +1027,26 @@ func storeFolderMapAggregates(root, target string, aggregates map[string]folderM
 	}
 	for path, aggregate := range aggregates {
 		index.Directories[path] = aggregate
+		if store.live != nil {
+			store.live[path] = aggregate
+		}
 	}
 	for ancestor := filepath.Dir(target); isWithin(root, ancestor) && ancestor != target; ancestor = filepath.Dir(ancestor) {
 		if aggregate, exists := index.Directories[ancestor]; exists {
 			if canPropagate || canPropagateActivity {
 				canPropagateBytes := canPropagate && aggregate.Complete
 				if canPropagateBytes {
-					if rootBaselineKnown && !aggregate.BaselineKnown && aggregate.Known && aggregate.Complete {
-						// Migrate this ancestor from the pre-baseline aggregate index.
-						aggregate.BaselineBytes = aggregate.Bytes
-						aggregate.BaselineKnown = true
-						aggregate.BaselineComplete = true
-						aggregate.BaselineAt = aggregate.ScannedAt
+					if rootBaselineKnown {
+						if baselineBytes, ok := folderMapRootCheckpointBytes(root, ancestor, aggregate, true, rootBaselineAt, rootScan); ok {
+							aggregate.BaselineBytes = baselineBytes
+							aggregate.BaselineKnown = true
+							aggregate.BaselineComplete = true
+							aggregate.BaselineAt = rootBaselineAt
+						} else {
+							aggregate.BaselineKnown = false
+							aggregate.BaselineComplete = false
+							aggregate.BaselineAt = time.Time{}
+						}
 					}
 					aggregate.Bytes += byteDelta
 					aggregate.Files += fileDelta
@@ -1070,31 +1091,50 @@ func storeFolderMapAggregates(root, target string, aggregates map[string]folderM
 				}
 				aggregate.ScannedAt = current.ScannedAt
 				index.Directories[ancestor] = aggregate
+				if store.live != nil {
+					store.live[ancestor] = aggregate
+				}
 			} else {
 				delete(index.Directories, ancestor)
+				delete(store.live, ancestor)
 			}
 		}
 		if ancestor == root || filepath.Dir(ancestor) == ancestor {
 			break
 		}
 	}
-	_ = writeFolderMapAggregateIndex(root, index)
-	for path := range aggregates {
-		if filepath.Clean(path) == filepath.Clean(target) {
-			continue
+}
+
+// Root scans compare against the latest checkpoint; local refreshes keep the
+// displayed root comparison. Aggregate records avoid decoding a snapshot when
+// they already contain the matching baseline.
+func folderMapRootCheckpointBytes(root, path string, previous folderMapAggregate, exists bool, checkpoint time.Time, rootScan bool) (int64, bool) {
+	if exists && previous.Known && previous.Complete {
+		if rootScan && previous.BaselineKnown && previous.BaselineComplete && previous.BaselineAt.Equal(checkpoint) {
+			return previous.BaselineBytes, true
 		}
-		if snapshotPath, err := folderMapSnapshotPath(root, path); err == nil {
-			_ = os.Remove(snapshotPath)
-		}
-	}
-	for ancestor := filepath.Dir(target); isWithin(root, ancestor) && ancestor != target; ancestor = filepath.Dir(ancestor) {
-		if snapshotPath, err := folderMapSnapshotPath(root, ancestor); err == nil {
-			_ = os.Remove(snapshotPath)
-		}
-		if ancestor == root || filepath.Dir(ancestor) == ancestor {
-			break
+		if !rootScan && previous.DeltaKnown && previous.DeltaSince.Equal(checkpoint) {
+			return previous.Bytes - previous.DeltaBytes, true
 		}
 	}
+	kind := folderMapComparison
+	if rootScan {
+		kind = folderMapCheckpoint
+	}
+	if filepath.Clean(path) != filepath.Clean(root) {
+		if parent, ok := readFolderMapDBSnapshot(root, filepath.Dir(path), kind); ok && parent.SizeKnown && parent.SizeComplete {
+			for _, entry := range parent.Children {
+				if entry.Path == path {
+					return entry.Bytes, entry.SizeKnown && entry.SizeComplete && !entry.SizeStale
+				}
+			}
+			return 0, true
+		}
+	}
+	if snapshot, ok := readFolderMapDBSnapshot(root, path, kind); ok && snapshot.SizeKnown && snapshot.SizeComplete {
+		return snapshot.Bytes, true
+	}
+	return 0, false
 }
 
 func advanceFolderMapAggregateBaseline(root string, initialize bool) error {
@@ -1133,133 +1173,69 @@ func advanceFolderMapAggregateBaseline(root string, initialize bool) error {
 			}
 		} else {
 			aggregate.BaselineComplete = false
+			aggregate.BaselineAt = rootAggregate.ScannedAt
 		}
 		index.Directories[path] = aggregate
+		if store.live != nil {
+			store.live[path] = aggregate
+		}
 	}
-	return writeFolderMapAggregateIndex(root, index)
+	return nil
 }
 
 func folderMapHasComparisonBaseline(aggregate folderMapAggregate) bool {
 	return aggregate.BaselineKnown && aggregate.BaselineComplete || aggregate.Known && aggregate.Complete
 }
 
-func writeFolderMapAggregateIndex(root string, index *folderMapAggregateIndex) error {
-	path, err := folderMapAggregateIndexPath(root)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".folder-map-index-*.tmp")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	writer := gzip.NewWriter(temporary)
-	encodeErr := gob.NewEncoder(writer).Encode(index)
-	if closeErr := writer.Close(); encodeErr == nil {
-		encodeErr = closeErr
-	}
-	if closeErr := temporary.Close(); encodeErr == nil {
-		encodeErr = closeErr
-	}
-	if encodeErr != nil {
-		return encodeErr
-	}
-	return os.Rename(temporaryPath, path)
-}
-
-func folderMapSnapshotPath(root, target string) (string, error) {
-	cacheRoot, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
-	key := sha256.Sum256([]byte("folder-map-v3\x00" + filepath.Clean(root) + "\x00" + filepath.Clean(target)))
-	return filepath.Join(cacheRoot, "shed", "folder-maps", hex.EncodeToString(key[:12])+".gob.gz"), nil
-}
-
-func folderMapBaselinePath(root, target string) (string, error) {
-	cacheRoot, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
-	key := sha256.Sum256([]byte("folder-map-baseline-v1\x00" + filepath.Clean(root) + "\x00" + filepath.Clean(target)))
-	return filepath.Join(cacheRoot, "shed", "folder-map-baselines", hex.EncodeToString(key[:12])+".gob.gz"), nil
-}
-
 func loadFolderMapSnapshot(root, target string) (*FolderMap, bool) {
-	displayPath, err := folderMapSnapshotPath(root, target)
-	if err == nil {
-		if snapshot, ok := readFolderMapSnapshotAtPath(displayPath, root, target); ok && folderMapSnapshotFresh(snapshot) {
-			return snapshot, true
-		}
-	}
-	if snapshot, ok := loadFolderMapBaselineSnapshot(root, target); ok && folderMapSnapshotFresh(snapshot) {
+	if snapshot, ok := readFolderMapDBSnapshot(root, target, folderMapDisplay); ok && folderMapSnapshotFresh(snapshot) {
 		return snapshot, true
 	}
 	return nil, false
 }
 
-func loadFolderMapBaselineSnapshot(root, target string) (*FolderMap, bool) {
-	path, err := folderMapBaselinePath(root, target)
-	if err != nil {
-		return nil, false
-	}
-	return readFolderMapSnapshotAtPath(path, root, target)
-}
-
 func loadStoredFolderMapSnapshot(root, target string) (*FolderMap, bool) {
-	if snapshot, ok := loadFolderMapBaselineSnapshot(root, target); ok {
-		return snapshot, true
+	aggregate := loadFolderMapAggregates(root, []string{root})[root]
+	baseline := aggregate.DeltaSince
+	if baseline.IsZero() {
+		baseline = aggregate.BaselineAt
 	}
-	// The pre-delta app kept only the latest visible map snapshot. Use it once
-	// as a migration baseline when no dedicated comparison snapshot exists.
-	legacyPath, err := folderMapSnapshotPath(root, target)
-	if err != nil {
-		return nil, false
-	}
-	return readFolderMapSnapshotAtPath(legacyPath, root, target)
+	return loadScanFolderMapSnapshot(root, target, false, baseline)
 }
 
-func readFolderMapSnapshotAtPath(path, root, target string) (*FolderMap, bool) {
-	file, err := os.Open(path)
-	if err != nil {
+func loadScanFolderMapSnapshot(root, target string, rootScan bool, baseline time.Time) (*FolderMap, bool) {
+	kind := folderMapComparison
+	if rootScan {
+		kind = folderMapCheckpoint
+	}
+	snapshot, ok := readFolderMapDBSnapshot(root, target, kind)
+	if !ok {
 		return nil, false
 	}
-	defer file.Close()
-	reader, err := gzip.NewReader(file)
-	if err != nil {
-		return nil, false
+	snapshot.GeneratedAt = baseline.UTC().Format(time.RFC3339)
+	snapshot.DeltaBytes = 0
+	snapshot.DeltaKnown = snapshot.SizeKnown && snapshot.SizeComplete
+	snapshot.DeltaSince = snapshot.GeneratedAt
+	snapshot.DeltaGrowthBytes = 0
+	snapshot.DeltaShrinkBytes = 0
+	snapshot.DeltaActivityKnown = snapshot.DeltaKnown
+	for i := range snapshot.Children {
+		entry := &snapshot.Children[i]
+		entry.DeltaBytes = 0
+		entry.DeltaKnown = entry.SizeKnown && entry.SizeComplete && !entry.SizeStale
+		entry.DeltaSince = snapshot.GeneratedAt
+		entry.DeltaGrowthBytes = 0
+		entry.DeltaShrinkBytes = 0
+		entry.DeltaActivityKnown = entry.DeltaKnown
 	}
-	defer reader.Close()
-	var snapshot FolderMap
-	if err := gob.NewDecoder(reader).Decode(&snapshot); err != nil || snapshot.Root != root || snapshot.Path != target || snapshot.GeneratedAt == "" {
-		return nil, false
-	}
-	return &snapshot, true
-}
-
-func seedFolderMapBaselineSnapshot(snapshot *FolderMap) {
-	if snapshot == nil {
-		return
-	}
-	path, err := folderMapBaselinePath(snapshot.Root, snapshot.Path)
-	if err != nil {
-		return
-	}
-	if _, err := os.Stat(path); err == nil {
-		return
-	}
-	_ = saveFolderMapSnapshotAtPath(snapshot, path)
+	return snapshot, true
 }
 
 func applyFolderMapDeltas(snapshot, previous *FolderMap, resetUnchanged bool) {
 	if snapshot == nil || previous == nil || snapshot.Path != previous.Path {
 		return
 	}
-	if snapshot.SizeKnown && snapshot.SizeComplete && previous.SizeKnown && previous.SizeComplete {
+	if !snapshot.DeltaKnown && snapshot.SizeKnown && snapshot.SizeComplete && previous.SizeKnown && previous.SizeComplete {
 		if !resetUnchanged && snapshot.Bytes == previous.Bytes {
 			if previous.DeltaKnown {
 				snapshot.DeltaBytes = previous.DeltaBytes
@@ -1281,6 +1257,11 @@ func applyFolderMapDeltas(snapshot, previous *FolderMap, resetUnchanged bool) {
 	}
 	for index := range snapshot.Children {
 		entry := &snapshot.Children[index]
+		if !entry.Directory {
+			entry.DeltaKnown = false
+			entry.DeltaBytes = 0
+			entry.DeltaSince = ""
+		}
 		if entry.DeltaKnown {
 			continue
 		}
@@ -1361,9 +1342,6 @@ func folderMapDeltaActivity(entries []FolderMapEntry, previous *FolderMap) (grow
 // Check the cached layer's direct entries before using it. Deep changes are
 // picked up by the explicit size refresh action, avoiding a cold volume walk.
 func folderMapSnapshotFresh(snapshot *FolderMap) bool {
-	if _, err := time.Parse(time.RFC3339, snapshot.GeneratedAt); err != nil {
-		return false
-	}
 	entries, err := os.ReadDir(snapshot.Path)
 	if err != nil || len(entries) != len(snapshot.Children) {
 		return false
@@ -1383,38 +1361,6 @@ func folderMapSnapshotFresh(snapshot *FolderMap) bool {
 		}
 	}
 	return true
-}
-
-func saveFolderMapSnapshot(snapshot *FolderMap) error {
-	path, err := folderMapSnapshotPath(snapshot.Root, snapshot.Path)
-	if err != nil {
-		return err
-	}
-	return saveFolderMapSnapshotAtPath(snapshot, path)
-}
-
-func saveFolderMapSnapshotAtPath(snapshot *FolderMap, path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".folder-map-*.tmp")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	writer := gzip.NewWriter(temporary)
-	encodeErr := gob.NewEncoder(writer).Encode(snapshot)
-	if closeErr := writer.Close(); encodeErr == nil {
-		encodeErr = closeErr
-	}
-	if closeErr := temporary.Close(); encodeErr == nil {
-		encodeErr = closeErr
-	}
-	if encodeErr != nil {
-		return encodeErr
-	}
-	return os.Rename(temporaryPath, path)
 }
 
 func sortFolderMapEntries(entries []FolderMapEntry) {

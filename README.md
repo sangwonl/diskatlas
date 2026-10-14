@@ -46,6 +46,12 @@ DiskAtlas checks GitHub Releases for newer versions and shows a notice in the ap
 - Lets you filter by size, age, and category, and reveal an item's location before taking action.
 - Tracks filesystem changes so later refreshes can update affected areas without always repeating a full scan.
 
+Desktop refreshes use macOS FSEvents or the Windows NTFS USN journal to remeasure changed branches and reuse indexed sizes elsewhere. The first scan establishes a saved journal checkpoint; existing indexes need one scan to establish it after upgrading. If the journal is unavailable, its history has expired, or Windows permissions prevent access, DiskAtlas falls back to a full scan of the selected folder. Each completed scan of the selected root compares all folders against the previous root checkpoint and saves a new checkpoint for the next root scan. Browsing and refreshing a subfolder keep the displayed comparison date shared across the tree. You can browse folders while a scan continues in the background; completed directory measurements update the visible map in batches while preserving your location and selection. Use Cancel to stop the scan.
+
+Desktop measurements are stored in one SQLite database: `~/Library/Caches/diskatlas/folder-map.sqlite` on macOS or `%LocalAppData%\diskatlas\folder-map.sqlite` on Windows. Scan results are saved in batches; completing a scan commits its measurements and comparison checkpoints together. Cancelled or failed scans preserve the last completed results. SQLite may also create `-wal` and `-shm` files beside the database.
+
+The SQLite cache starts a new comparison history. Earlier per-folder caches in `~/Library/Caches/shed/folder-maps` and `~/Library/Caches/shed/folder-map-baselines` are not imported or used; they can be removed after closing the app. The first root scan establishes the new baseline, and later root scans show changes since the previous checkpoint.
+
 DiskAtlas scans the configured locations on your computer. It does not follow symbolic links. Some usage may be unclassified, and shared filesystem blocks can make reported sizes differ from the space reclaimed after cleanup.
 
 ## Safety
@@ -72,7 +78,7 @@ Scan results and history are stored in the `.shed` directory under the current w
 
 ## Build from source
 
-The native app uses Go 1.25, Wails v2, and Node.js 22. With the Wails CLI installed:
+The native app uses Go 1.25, Wails v2, and Node.js 22. The Wails CLI version is pinned in `go.mod` and runs through Go's module tool support:
 
 ```sh
 npm run wails:dev

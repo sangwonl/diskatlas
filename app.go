@@ -99,6 +99,11 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(context.Context) {
+	a.folderMapMu.Lock()
+	for _, cancel := range a.folderMaps {
+		cancel()
+	}
+	a.folderMapMu.Unlock()
 	stopFolderScope()
 }
 
@@ -276,6 +281,12 @@ func (a *App) StorageInfo() (core.Storage, error) {
 }
 
 func (a *App) TrashPath(path string, estimatedBytes int64) (core.TrashMoveResult, error) {
+	// Let active scans roll back before updating measurements for a trash move.
+	a.folderMapMu.Lock()
+	for _, cancel := range a.folderMaps {
+		cancel()
+	}
+	a.folderMapMu.Unlock()
 	return core.MoveToTrash(a.scanRoot(), path, estimatedBytes)
 }
 
