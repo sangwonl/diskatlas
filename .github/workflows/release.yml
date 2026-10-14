@@ -100,12 +100,6 @@ jobs:
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD"
 
-      - name: Install Wails CLI
-        shell: bash
-        run: |
-          go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
       - name: Build, sign, and notarize macOS artifacts
         run: npm run release:mac:direct
 
@@ -181,12 +175,6 @@ jobs:
           if (-not (Get-Command makensis -ErrorAction SilentlyContinue) -and -not (Test-Path (Join-Path $nsisDirectory 'makensis.exe'))) {
             throw 'NSIS installation did not provide makensis.exe.'
           }
-
-      - name: Install Wails CLI
-        shell: pwsh
-        run: |
-          go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
-          "$(go env GOPATH)\bin" >> $env:GITHUB_PATH
 
       - name: Build and sign Windows installer
         if: ${{ steps.windows-signing.outputs.enabled == 'true' }}

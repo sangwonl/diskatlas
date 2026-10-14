@@ -14,7 +14,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-command -v wails >/dev/null || { echo "Wails CLI is required (go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0)." >&2; exit 1; }
+command -v go >/dev/null || { echo "Go is required to run the project-pinned Wails CLI." >&2; exit 1; }
 command -v node >/dev/null || { echo "Node.js is required to build the frontend." >&2; exit 1; }
 
 : "${DISKATLAS_BUNDLE_ID:?Set DISKATLAS_BUNDLE_ID to the registered reverse-DNS bundle ID (for example com.example.diskatlas).}"
@@ -42,7 +42,7 @@ entitlements="$ROOT/build/darwin/entitlements.plist"
 output="$ROOT/dist/release/macos/$channel"
 mkdir -p "$output"
 
-wails build -platform darwin/universal -clean
+go tool wails build -platform darwin/universal -clean
 [[ -d "$app" ]] || { echo "Wails did not produce $app" >&2; exit 1; }
 [[ -x "$executable" ]] || { echo "Wails did not produce the app executable at $executable" >&2; exit 1; }
 

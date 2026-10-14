@@ -55,7 +55,7 @@ function Sign-File {
 if (-not $env:OS -or $env:OS -ne 'Windows_NT') {
     throw 'Windows release builds must run on Windows.'
 }
-$wails = (Get-Command wails -ErrorAction Stop).Source
+$go = (Get-Command go -ErrorAction Stop).Source
 $versionInfo = Get-Content (Join-Path $root 'wails.json') -Raw | ConvertFrom-Json
 $version = [string]$versionInfo.info.productVersion
 $wailsArch = if ($Architecture -eq 'x64') { 'amd64' } else { 'arm64' }
@@ -72,7 +72,7 @@ if ($Channel -eq 'Direct') {
         throw 'Choose either -Unsigned or -SignThumbprint.'
     }
 
-    Invoke-Checked $wails @('build', '-platform', "windows/$wailsArch", '-clean', '-nsis', '-installscope', 'user')
+    Invoke-Checked $go @('tool', 'wails', 'build', '-platform', "windows/$wailsArch", '-clean', '-nsis', '-installscope', 'user')
     if (-not (Test-Path $exe)) { throw "Wails did not produce $exe" }
 
     $makensis = (Get-Command makensis -ErrorAction Stop).Source
@@ -113,7 +113,7 @@ if ($PackageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$' -or @($PackageVersion.Split
     throw 'PackageVersion must contain four numeric components, each no greater than 65535 (for example 0.1.0.0).'
 }
 
-Invoke-Checked $wails @('build', '-platform', "windows/$wailsArch", '-clean', '-nopackage')
+Invoke-Checked $go @('tool', 'wails', 'build', '-platform', "windows/$wailsArch", '-clean', '-nopackage')
 if (-not (Test-Path $exe)) { throw "Wails did not produce $exe" }
 $makeAppx = Find-WindowsSdkTool 'MakeAppx'
 $stage = Join-Path ([IO.Path]::GetTempPath()) "DiskAtlas-msix-$PID"

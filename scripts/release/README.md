@@ -1,6 +1,6 @@
 # Release builds
 
-Build each desktop release on its target OS. The scripts use the installed Wails CLI, Go, and Node.js. Windows Store packaging also needs the Windows SDK (`MakeAppx.exe`); Windows direct distribution needs NSIS (`makensis`) and, for a public release, an Authenticode certificate available to SignTool.
+Build each desktop release on its target OS. The scripts use the Wails CLI pinned in `go.mod` through `go tool`, plus Go and Node.js. No global Wails CLI installation is needed. Windows Store packaging also needs the Windows SDK (`MakeAppx.exe`); Windows direct distribution needs NSIS (`makensis`) and, for a public release, an Authenticode certificate available to SignTool.
 
 Artifacts are written under the ignored `dist/release/` directory.
 
