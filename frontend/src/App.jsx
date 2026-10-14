@@ -1,9 +1,11 @@
 import React from 'react';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { cancelFolderMap, chooseScanRoot, folderMap, getScanRoot, measureFolderMap, onScanProgress, openTrash, refreshFolderMap, reloadFolderMap, revealPath, storageInfo, trashPath } from './lib/api';
 import { BrowserOpenURL } from '../wailsjs/runtime/runtime';
 import { layoutTreemap } from './lib/treemap';
 import { appVersion, checkForUpdate, updatePreview } from './lib/updates';
+import { sameVisibleMap } from './lib/map-updates';
+import { singleSelection, selectMapCell, refreshMapSelection, selectionTargets, trashSelection } from './lib/map-selection';
 
 const DAY = 86_400_000;
 
@@ -172,6 +174,16 @@ function pathKey(path) {
   return /^[A-Za-z]:/.test(normalized) || normalized.startsWith('//') ? normalized.toLowerCase() : normalized;
 }
 
+function isPathWithin(path, root) {
+  const rootKey = pathKey(root);
+  let current = path;
+  while (current) {
+    if (pathKey(current) === rootKey) return true;
+    current = parentPath(current);
+  }
+  return false;
+}
+
 function scopedPathParts(path, scopeRoot) {
   const parts = pathParts(path);
   if (!scopeRoot) return parts;
@@ -251,7 +263,7 @@ const VIRTUAL_LAYOUT_SCALE = 0.35;
 const MAX_VIRTUAL_AREA_SHARE = 0.03;
 const TRASH_HOLD_MS = 2000;
 
-function HoldToTrashButton({ disabled, busy, onConfirm, hotkeyProgress = 0, shortcutLabel }) {
+function HoldToTrashButton({ disabled, busy, onConfirm, hotkeyProgress = 0, shortcutLabel, count = 1 }) {
   const [progress, setProgress] = useState(0);
   const startedAtRef = useRef(0);
   const frameRef = useRef(0);
@@ -308,10 +320,10 @@ function HoldToTrashButton({ disabled, busy, onConfirm, hotkeyProgress = 0, shor
       onKeyUp={event => { if (event.code === 'Space') cancel(); }}
       onBlur={cancel}
       onClick={event => event.preventDefault()}
-      title={`2초 유지: ${shortcutLabel} 또는 버튼을 길게 눌러 휴지통으로 이동`}
-      aria-label={busy ? '휴지통으로 이동 중' : `2초 동안 버튼을 누르거나 ${shortcutLabel} 단축키를 유지해 휴지통으로 이동`}
+      title={`${count}개 항목 · 2초 유지: ${shortcutLabel} 또는 버튼을 길게 눌러 휴지통으로 이동`}
+      aria-label={busy ? `${count}개 항목 휴지통으로 이동 중` : `${count}개 항목 · 2초 동안 버튼을 누르거나 ${shortcutLabel} 단축키를 유지해 휴지통으로 이동`}
     >
-      <span>{busy ? '이동 중…' : visibleProgress > 0 ? '계속 누르면 휴지통으로 이동' : '2초 눌러 휴지통으로'}</span>
+      <span>{busy ? '이동 중…' : visibleProgress > 0 ? '계속 누르면 휴지통으로 이동' : `${count > 1 ? `${count}개 · ` : ''}2초 눌러 휴지통으로`}</span>
       <kbd>{shortcutLabel}</kbd>
     </button>
   );
@@ -371,6 +383,25 @@ function createVirtualGroup(rows, direct, virtualDepth) {
   return virtual;
 }
 
+function refreshMapItem(item, map) {
+  if (!item) return null;
+  if (!item.virtual) return map.children.find(child => child.path === item.path) || null;
+  const members = new Set(selectionTargets(singleSelection(item)).map(child => child.path));
+  const children = map.children.filter(child => members.has(child.path));
+  if (!children.length) return null;
+  return { ...createVirtualGroup(children, [], Math.max(0, item.virtualDepth - 1)), path: item.path };
+}
+
+function refreshVirtualStack(stack, map) {
+  const updated = [];
+  for (const entry of stack) {
+    const group = refreshMapItem(entry.group, map);
+    if (!group) break;
+    updated.push({ ...entry, group });
+  }
+  return updated;
+}
+
 function groupSmallChildren(children, viewport = { width: 0, height: 0 }, virtualDepth = 0) {
   if (children.length < 2) return children;
   let direct = [...children].sort((a, b) => Number(b.bytes || 0) - Number(a.bytes || 0));
@@ -398,9 +429,11 @@ function groupSmallChildren(children, viewport = { width: 0, height: 0 }, virtua
   return grouped.length ? [...direct, createVirtualGroup(grouped, direct, virtualDepth)] : direct;
 }
 
-function Treemap({ data, selected, onSelect, onOpen, onBack, onHover, onPrefetch }) {
+function Treemap({ data, selected, selection, onSelect, onOpen, onBack, onHover, onPrefetch }) {
   const mapRef = useRef(null);
   const cellRefs = useRef([]);
+  const suppressFocusRef = useRef('');
+  const selectedPaths = new Set(selection.items.map(item => item.path));
   const previousPathRef = useRef(data.path);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   useEffect(() => {
@@ -428,7 +461,11 @@ function Treemap({ data, selected, onSelect, onOpen, onBack, onHover, onPrefetch
   const moveFocus = (index, cell) => {
     if (index < 0 || !cell) return;
     onSelect(cell);
-    requestAnimationFrame(() => cellRefs.current[index]?.focus());
+    requestAnimationFrame(() => {
+      suppressFocusRef.current = cell.path;
+      cellRefs.current[index]?.focus();
+      suppressFocusRef.current = '';
+    });
   };
   const handleCellKeyDown = (event, cell, index) => {
     if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
@@ -459,14 +496,18 @@ function Treemap({ data, selected, onSelect, onOpen, onBack, onHover, onPrefetch
       const originIndex = selectedIndex >= 0 ? selectedIndex : 0;
       const next = directionalCell(cells, viewport, originIndex, event.key) || { cell: cells[originIndex], index: originIndex };
       onSelect(next.cell);
-      requestAnimationFrame(() => cellRefs.current[next.index]?.focus());
+      requestAnimationFrame(() => {
+        suppressFocusRef.current = next.cell.path;
+        cellRefs.current[next.index]?.focus();
+        suppressFocusRef.current = '';
+      });
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [cells, onSelect, selected?.path, viewport]);
   if (!cells.length) return null;
   return (
-    <div ref={mapRef} className="treemap" role="tree" aria-label={`${data.path} 용량 지도. 방향키로 이동, Enter로 폴더 열기, Backspace 또는 Escape로 뒤로 가기`}>
+    <div ref={mapRef} className="treemap" role="tree" onContextMenu={event => event.preventDefault()} aria-multiselectable="true" aria-label={`${data.path} 용량 지도. Ctrl 또는 Cmd+클릭으로 항목 선택·해제, 방향키로 이동, Enter로 폴더 열기, Backspace 또는 Escape로 뒤로 가기`}>
       {cells.map((cell, index) => {
         const density = Math.max(cell.virtual ? 1 : 0, cellDensity(cell, viewport));
         return (
@@ -475,15 +516,26 @@ function Treemap({ data, selected, onSelect, onOpen, onBack, onHover, onPrefetch
             role="treeitem"
             key={cell.path}
             ref={node => { cellRefs.current[index] = node; }}
-            className={`map-cell density-${density} ${deltaColorClass(cell)} ${selected?.path === cell.path ? 'selected' : ''}`}
+            className={`map-cell density-${density} ${deltaColorClass(cell)} ${selectedPaths.has(cell.path) ? 'selected' : ''}`}
             tabIndex={index === activeIndex ? 0 : -1}
             style={{ left: `${cell.x}%`, top: `${cell.y}%`, width: `${cell.width}%`, height: `${cell.height}%` }}
-            onClick={() => onSelect(cell)}
+            aria-selected={selectedPaths.has(cell.path)}
+            onPointerDown={event => {
+              if (event.button !== 0 && !(event.ctrlKey && event.button === 2)) return;
+              const toggle = event.ctrlKey || event.metaKey;
+              if (toggle) event.preventDefault();
+              suppressFocusRef.current = cell.path;
+              onSelect(cell, { toggle });
+              if (toggle) event.currentTarget.focus();
+            }}
+            onPointerUp={() => { suppressFocusRef.current = ''; }}
+            onPointerCancel={() => { suppressFocusRef.current = ''; }}
+            onClick={event => { if (event.detail === 0) onSelect(cell, { toggle: event.ctrlKey || event.metaKey }); }}
             onDoubleClick={() => cell.directory && onOpen(cell)}
             onKeyDown={event => handleCellKeyDown(event, cell, index)}
             onMouseEnter={() => { onHover(cell); if (cell.directory && !cell.virtual) onPrefetch(cell.path); }}
             onMouseLeave={() => onHover(null)}
-            onFocus={() => { onHover(cell); onSelect(cell); }}
+            onFocus={() => { onHover(cell); if (suppressFocusRef.current !== cell.path && !selectedPaths.has(cell.path)) onSelect(cell); }}
             onBlur={() => onHover(null)}
             title={`${cell.virtual ? cell.name : cell.path}\n${sizeLabel(cell)} · ${deltaSummaryLabel(cell)}${deltaActivityLabel(cell) ? ` · ${deltaActivityLabel(cell)}` : ''} · ${modifiedLabel(cell.modifiedAt)}`}
           >
@@ -501,15 +553,32 @@ export default function App() {
   const mapCacheRef = useRef(new Map());
   const prefetchingRef = useRef(new Set());
   const currentPathRef = useRef(null);
+  const visibleDataRef = useRef(null);
   const loadRequestRef = useRef(0);
   const activeProgressRequestRef = useRef('');
+  const scanTaskRef = useRef(null);
+  const scanSequenceRef = useRef(0);
+  const navigationPendingRef = useRef(false);
+  const visibleRefreshRef = useRef(0);
+  const syncVisibleMapRef = useRef(null);
+  const cacheGenerationRef = useRef(0);
+  const finalSyncPendingRef = useRef(false);
   const progressCountRef = useRef(0);
   const initializedRef = useRef(false);
   const [data, setData] = useState(null);
   const [storage, setStorage] = useState(null);
   const [scanRoot, setScanRoot] = useState('');
   const [history, setHistory] = useState([]);
-  const [selected, setSelected] = useState(null);
+  const [selection, setSelection] = useState(() => singleSelection(null));
+  const selected = selection.active;
+  const setSelected = useCallback(item => setSelection(singleSelection(item)), []);
+  const selectCell = useCallback((item, { toggle = false } = {}) => {
+    setSelection(current => selectMapCell(current, item, toggle));
+  }, []);
+  const selectedTargets = selectionTargets(selection);
+  const selectionKey = JSON.stringify(selectedTargets.map(item => item.path).sort());
+  const multipleSelected = selectedTargets.length > 1;
+  const selectionBytes = selectedTargets.reduce((sum, item) => sum + Number(item.bytes || 0), 0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -522,28 +591,27 @@ export default function App() {
   const [choosingRoot, setChoosingRoot] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState(null);
   const [trashing, setTrashing] = useState(false);
+  const trashBusyRef = useRef(false);
   const [trashHotkeyProgress, setTrashHotkeyProgress] = useState(0);
   const trashHotkeyRef = useRef({ startedAt: 0, frame: 0, code: '', path: '', requiresModifier: false, progressBucket: 0 });
   const trashHotkeyActionRef = useRef(null);
 
   const cancelActiveFolderMeasurement = () => {
     const requestID = activeProgressRequestRef.current;
-    if (!requestID) return;
+    scanTaskRef.current = null;
+    cacheGenerationRef.current += 1;
+    mapCacheRef.current.clear();
+    finalSyncPendingRef.current = true;
     activeProgressRequestRef.current = '';
-    cancelFolderMap(requestID).catch(() => {});
-  };
-
-  const cancelFolderScan = () => {
-    const wasLoading = loading;
-    cancelActiveFolderMeasurement();
-    loadRequestRef.current += 1;
-    setLoading(false);
+    visibleRefreshRef.current += 1;
+    if (requestID) cancelFolderMap(requestID).catch(() => {});
     setRefreshing(false);
     setScanning(false);
     setProgress(null);
-    if (wasLoading && data?.path) {
-      setHistory(stack => stack.at(-1) === data.path ? stack.slice(0, -1) : stack);
-    }
+  };
+
+  const cancelFolderScan = () => {
+    cancelActiveFolderMeasurement();
   };
 
   useEffect(() => {
@@ -624,6 +692,7 @@ export default function App() {
 
   const acceptMap = next => {
     currentPathRef.current = next.path;
+    visibleDataRef.current = next;
     setData(next);
     setLoading(false);
   };
@@ -681,80 +750,96 @@ export default function App() {
     }
   };
 
-  const reloadCurrentMap = async () => {
-    if (!data || loading || refreshing || virtualStack.length) return;
-    const request = ++loadRequestRef.current;
-    const progressRequestID = String(request);
-    activeProgressRequestRef.current = progressRequestID;
+  const refreshVisibleMap = async () => {
+    const path = currentPathRef.current;
+    if (!path || navigationPendingRef.current) return null;
+    const navigation = loadRequestRef.current;
+    const revision = ++visibleRefreshRef.current;
+    const next = await folderMap(path);
+    if (revision !== visibleRefreshRef.current || navigation !== loadRequestRef.current || pathKey(path) !== pathKey(currentPathRef.current) || navigationPendingRef.current) return null;
+    finalSyncPendingRef.current = false;
+    mapCacheRef.current.set(next.path, next);
+    updateParentCache(next);
+    if (sameVisibleMap(visibleDataRef.current, next)) return next;
+    visibleDataRef.current = next;
+    setData(next);
+    const refreshItem = item => refreshMapItem(item, next);
+    setSelection(current => refreshMapSelection(current, refreshItem));
+    setHovered(refreshItem);
+    setVirtualStack(stack => refreshVirtualStack(stack, next));
+    return next;
+  };
+  syncVisibleMapRef.current = refreshVisibleMap;
+
+  const startFolderScan = async (path, force = false) => {
+    // Navigation and scan lifetimes are independent. Keep one scan running,
+    // and let navigation read the latest completed measurements at any time.
+    if (scanTaskRef.current) return null;
+    const task = { id: `scan-${++scanSequenceRef.current}`, path };
+    scanTaskRef.current = task;
+    activeProgressRequestRef.current = task.id;
     progressCountRef.current = 0;
     setRefreshing(true);
     setScanning(true);
-    setProgress({ phase: 'folder-map', requestID: progressRequestID, filesScanned: 0, path: data.path });
+    setProgress({ phase: 'folder-map', requestID: task.id, filesScanned: 0, path });
     setError('');
+    let visible = null;
     try {
-      const next = await refreshFolderMap(data.path, progressRequestID);
-      if (request !== loadRequestRef.current) return;
+      const next = await (force ? refreshFolderMap(path, task.id) : measureFolderMap(path, task.id));
+      if (scanTaskRef.current !== task) return null;
+      cacheGenerationRef.current += 1;
+      for (const cachedPath of mapCacheRef.current.keys()) {
+        if (isPathWithin(cachedPath, next.path)) mapCacheRef.current.delete(cachedPath);
+      }
       mapCacheRef.current.set(next.path, next);
       updateParentCache(next);
-      acceptMap(next);
-      setSelected(null);
-      setHovered(null);
+      finalSyncPendingRef.current = true;
+      visible = await syncVisibleMapRef.current?.();
       storageInfo().then(setStorage).catch(() => {});
+      return next;
     } catch (reason) {
-      if (request === loadRequestRef.current) setError(errorMessage(reason));
+      if (scanTaskRef.current === task) setError(errorMessage(reason));
+      return null;
     } finally {
-      if (request === loadRequestRef.current) {
+      if (scanTaskRef.current === task) {
+        scanTaskRef.current = null;
         activeProgressRequestRef.current = '';
         setRefreshing(false);
         setScanning(false);
         setProgress(null);
+        if (visible && !visible.generatedAt) void startFolderScan(visible.path);
+      } else if (!scanTaskRef.current) {
+        syncVisibleMapRef.current?.().catch(() => {});
       }
     }
   };
 
+  const reloadCurrentMap = () => {
+    if (!data || loading || scanTaskRef.current || virtualStack.length) return;
+    void startFolderScan(data.path, true);
+  };
+
   const loadMap = async (path = '', remember = false, force = false, measure = false) => {
-    cancelActiveFolderMeasurement();
+    const request = ++loadRequestRef.current;
+    visibleRefreshRef.current += 1;
     const key = path || data?.root || currentPathRef.current || scanRoot || '/';
+    const previousPath = currentPathRef.current;
+    if (remember && previousPath) setHistory(stack => [...stack, previousPath]);
     const cached = mapCacheRef.current.get(key);
     if (cached && !force && hasMeasuredFolderMap(cached) && (!measure || cached.sizeKnown !== false)) {
-      loadRequestRef.current += 1;
-      activeProgressRequestRef.current = '';
-      if (remember && data) setHistory(stack => [...stack, data.path]);
+      navigationPendingRef.current = false;
+      updateParentCache(cached);
       acceptMap(cached);
-      setScanning(false);
-      setProgress(null);
-      setRefreshing(false);
       setVirtualStack([]);
       setSelected(null);
       setHovered(null);
       return cached;
     }
-    const request = ++loadRequestRef.current;
-    const progressRequestID = measure ? String(request) : '';
-    activeProgressRequestRef.current = progressRequestID;
-    progressCountRef.current = 0;
-    const previousPath = data?.path;
-    if (remember && previousPath) setHistory(stack => [...stack, previousPath]);
+    navigationPendingRef.current = true;
     setLoading(true);
-    setRefreshing(false);
-    setScanning(measure && force);
-    setProgress(measure && force ? { phase: 'folder-map', requestID: progressRequestID, filesScanned: 0, path } : null);
     setError('');
     try {
-      let next;
-      if (measure && force) {
-        next = await refreshFolderMap(path, progressRequestID);
-      } else if (measure) {
-        next = await folderMap(path);
-        if (request !== loadRequestRef.current) return null;
-        if (!next.generatedAt || next.sizeKnown === false) {
-          setScanning(true);
-          setProgress({ phase: 'folder-map', requestID: progressRequestID, filesScanned: 0, path });
-          next = await measureFolderMap(path, progressRequestID);
-        }
-      } else {
-        next = await folderMap(path);
-      }
+      const next = await folderMap(path);
       if (request !== loadRequestRef.current) return null;
       mapCacheRef.current.set(path, next);
       mapCacheRef.current.set(next.path, next);
@@ -763,6 +848,7 @@ export default function App() {
       setVirtualStack([]);
       setSelected(null);
       setHovered(null);
+      if (measure && (force || !next.generatedAt || next.sizeKnown === false)) void startFolderScan(next.path, force);
       return next;
     } catch (reason) {
       if (request === loadRequestRef.current) {
@@ -772,20 +858,33 @@ export default function App() {
       return null;
     } finally {
       if (request === loadRequestRef.current) {
-        activeProgressRequestRef.current = '';
+        navigationPendingRef.current = false;
         setLoading(false);
-        setScanning(false);
-        setProgress(null);
+        if (finalSyncPendingRef.current && !scanTaskRef.current) syncVisibleMapRef.current?.().catch(() => {});
       }
     }
   };
+
+  useEffect(() => {
+    if (!scanning) return undefined;
+    let reading = false;
+    const timer = window.setInterval(async () => {
+      if (reading || !scanTaskRef.current) return;
+      reading = true;
+      try { await syncVisibleMapRef.current?.(); } catch { /* Keep the last visible measurement while scanning. */ }
+      finally { reading = false; }
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [scanning]);
 
   const prefetchMap = path => {
     if (scanning) return;
     if (hasMeasuredFolderMap(mapCacheRef.current.get(path)) || prefetchingRef.current.has(path)) return;
     prefetchingRef.current.add(path);
+    const generation = cacheGenerationRef.current;
     folderMap(path)
       .then(next => {
+        if (generation !== cacheGenerationRef.current) return;
         mapCacheRef.current.set(path, next);
         mapCacheRef.current.set(next.path, next);
       })
@@ -836,6 +935,7 @@ export default function App() {
     try {
       const root = await chooseScanRoot();
       if (!root || root === scanRoot) return;
+      cancelActiveFolderMeasurement();
       setScanRoot(root);
       setHistory([]);
       setVirtualStack([]);
@@ -852,13 +952,10 @@ export default function App() {
 
   const goBack = async () => {
     if (virtualStack.length) {
-      cancelActiveFolderMeasurement();
       loadRequestRef.current += 1;
-      activeProgressRequestRef.current = '';
+      visibleRefreshRef.current += 1;
+      navigationPendingRef.current = false;
       setLoading(false);
-      setRefreshing(false);
-      setScanning(false);
-      setProgress(null);
       setVirtualStack(stack => stack.slice(0, -1));
       setSelected(null);
       setHovered(null);
@@ -872,13 +969,10 @@ export default function App() {
 
   const openCell = async cell => {
     if (cell.virtual) {
-      cancelActiveFolderMeasurement();
       loadRequestRef.current += 1;
-      activeProgressRequestRef.current = '';
+      visibleRefreshRef.current += 1;
+      navigationPendingRef.current = false;
       setLoading(false);
-      setRefreshing(false);
-      setScanning(false);
-      setProgress(null);
       setVirtualStack(stack => [...stack, { group: cell }]);
       setSelected(null);
       setHovered(null);
@@ -918,10 +1012,17 @@ export default function App() {
   };
 
   const trashSelected = async () => {
-    if (!selected || selected.virtual || !data || trashing) return;
-    const target = selected;
+    if (!selectedTargets.length || !data || trashBusyRef.current || loading || refreshing) return;
+    if (selectedTargets.some(item => item.symlink || item.path === data.root)) return;
+    trashBusyRef.current = true;
+    const targets = selectedTargets;
     const currentDirectory = data.path;
-    const invalidateAffectedMaps = () => {
+    const invalidateAffectedMaps = removed => {
+      cacheGenerationRef.current += 1;
+      visibleRefreshRef.current += 1;
+      for (const [path, map] of mapCacheRef.current) {
+        if (removed.some(item => isPathWithin(map.path || path, item.path))) mapCacheRef.current.delete(path);
+      }
       let path = currentDirectory;
       while (path) {
         mapCacheRef.current.delete(path);
@@ -933,39 +1034,46 @@ export default function App() {
     setError('');
     setNotice('');
     try {
-      const result = await trashPath(target.path, Number(target.bytes || 0));
-      let refreshFailed = false;
-      if (currentPathRef.current === currentDirectory) {
-        setSelected(null);
-        try {
-          const next = await reloadFolderMap(currentDirectory);
-          if (next && currentPathRef.current === currentDirectory) {
-            mapCacheRef.current.set(next.path, next);
-            updateParentCache(next);
-            acceptMap(next);
-          } else {
-            invalidateAffectedMaps();
+      const { moved, failed } = await trashSelection(targets, trashPath);
+      let refreshFailed = moved.some(({ result }) => result?.measurementUpdateError);
+      if (moved.length) {
+        const removed = new Set(moved.map(({ item }) => item.path));
+        invalidateAffectedMaps(moved.map(({ item }) => item));
+        if (currentPathRef.current === currentDirectory) {
+          const remaining = { ...data, children: data.children.filter(item => !removed.has(item.path)) };
+          setSelection(current => refreshMapSelection(current, item => refreshMapItem(item, remaining)));
+          setVirtualStack(stack => refreshVirtualStack(stack, remaining));
+          setHovered(null);
+          try {
+            const next = await reloadFolderMap(currentDirectory);
+            if (next && currentPathRef.current === currentDirectory) {
+              mapCacheRef.current.set(next.path, next);
+              updateParentCache(next);
+              acceptMap(next);
+              setSelection(current => refreshMapSelection(current, item => refreshMapItem(item, next)));
+              setVirtualStack(stack => refreshVirtualStack(stack, next));
+            }
+          } catch {
+            refreshFailed = true;
           }
-        } catch {
-          refreshFailed = true;
-          invalidateAffectedMaps();
         }
-      } else {
-        invalidateAffectedMaps();
+        const nextStorage = await storageInfo().catch(() => null);
+        if (nextStorage) setStorage(nextStorage);
       }
-      const nextStorage = await storageInfo().catch(() => null);
-      if (nextStorage) setStorage(nextStorage);
-      if (result && !result.pendingSizeTracked) {
-        setNotice('휴지통으로 이동했어요. 이 항목의 대기 용량은 현재 확인할 수 없습니다.');
+      if (failed.length) {
+        const detail = failed.slice(0, 2).map(({ item, reason }) => `${item.name}: ${errorMessage(reason)}`).join(' / ');
+        setError(`${moved.length ? `${moved.length}개 휴지통 이동 · ` : ''}${failed.length}개 이동 실패: ${detail}`);
       } else if (refreshFailed) {
         setNotice('휴지통으로 이동했지만 현재 폴더 목록을 갱신하지 못했어요. 새로고침해 주세요.');
       } else {
-        setNotice('휴지통으로 이동했어요. 공간은 휴지통을 비운 뒤 확보됩니다.');
+        const count = moved.length > 1 ? `${moved.length}개 항목을 ` : '';
+        const untracked = moved.some(({ result }) => result && !result.pendingSizeTracked);
+        setNotice(`${count}휴지통으로 이동했어요. ${untracked ? '일부 항목의 대기 용량은 현재 확인할 수 없습니다.' : '공간은 휴지통을 비운 뒤 확보됩니다.'}`);
       }
     } catch (reason) {
       setError(errorMessage(reason));
-      setNotice('');
     } finally {
+      trashBusyRef.current = false;
       setTrashing(false);
     }
   };
@@ -980,12 +1088,12 @@ export default function App() {
   };
 
   const canTrashSelected = Boolean(
-    selected && !selected.virtual && !selected.symlink && data &&
-    selected.path !== data.root && !loading && !refreshing && !trashing
+    selectedTargets.length && data &&
+    selectedTargets.every(item => !item.symlink && item.path !== data.root) && !loading && !refreshing && !trashing
   );
   trashHotkeyActionRef.current = {
     canTrash: canTrashSelected,
-    path: selected?.path || '',
+    path: selectionKey,
     run: trashSelected,
   };
 
@@ -1073,9 +1181,7 @@ export default function App() {
 
   const used = storage ? Math.max(0, Number(storage.total) - Number(storage.available)) : 0;
   const scanCount = Number(progress?.filesScanned || 0);
-  const loadingText = scanning
-    ? `폴더 크기 계산 중 · ${scanCount.toLocaleString()}개 파일 확인`
-    : '폴더를 여는 중…';
+  const loadingText = '폴더를 여는 중…';
   const viewData = virtualStack.length ? virtualStack[virtualStack.length - 1].group : data;
   const visibleItems = layoutEntries(viewData).length;
   const isMacOS = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
@@ -1147,27 +1253,27 @@ export default function App() {
         </section>
 
         <section className={`map-stage ${loading ? 'loading' : ''}`}>
-          {viewData && <Treemap data={viewData} selected={selected} onSelect={setSelected} onBack={goBack} onHover={setHovered} onPrefetch={prefetchMap} onOpen={openCell} />}
+          {viewData && <Treemap data={viewData} selected={selected} selection={selection} onSelect={selectCell} onBack={goBack} onHover={setHovered} onPrefetch={prefetchMap} onOpen={openCell} />}
           {hovered && <div className="map-hover-card" role="status"><strong>{hovered.name}</strong><span>{sizeLabel(hovered)} · {deltaSummaryLabel(hovered)}{deltaActivityLabel(hovered) ? ` · ${deltaActivityLabel(hovered)}` : ''} · {modifiedLabel(hovered.modifiedAt)}</span><small>{hovered.virtual ? `${hovered.groupedCount}개 합산 · 가상 폴더` : hovered.path}</small>{hovered.directory && <em>더블 클릭 또는 Enter로 열기</em>}</div>}
           {!data && !loading && <div className="first-run"><strong>분석할 위치를 선택하세요</strong><span>선택한 폴더와 하위 폴더의 용량 지도를 엽니다.</span><button onClick={selectScanRoot} disabled={choosingRoot}>{choosingRoot ? '선택 중…' : '폴더 선택'}</button></div>}
-          {loading && <div className="map-loading" role="status" aria-live="polite"><span className="loading-spinner" /><span>{loadingText}</span>{scanning && progress?.path && <small>{progress.path}</small>}</div>}
+          {loading && <div className="map-loading" role="status" aria-live="polite"><span className="loading-spinner" /><span>{loadingText}</span></div>}
         </section>
 
         <footer className={`inspector${selected ? ' has-selection' : ''}`}>
           <div className="scan-status">
             {scanning ? <>
-              <span className="scan-status-label"><span className="pulse" />폴더 크기 계산 중 · {scanCount.toLocaleString()}개 확인</span>
+              <span className="scan-status-label" title={scanTaskRef.current?.path}><span className="pulse" />폴더 크기 계산 중 · {scanCount.toLocaleString()}개 확인</span>
               <button type="button" className="scan-cancel" onClick={cancelFolderScan}>취소</button>
             </> : viewData ? `${visibleItems.toLocaleString()}개 항목` : null}
           </div>
           {selected && <div className="selection-panel">
             <div className="selection-line">
-              <strong title={selected.path}>{selected.virtual ? selected.name : selected.path}</strong>
-              <span title={`${deltaSummaryLabel(selected)}${deltaActivityLabel(selected) ? ` · ${deltaActivityLabel(selected)}` : ''}`}>{sizeLabel(selected)} · {deltaValueLabel(selected)}{deltaActivityLabel(selected) ? ` · ${deltaActivityLabel(selected)}` : ''} · {modifiedLabel(selected.modifiedAt)}</span>
-              {!selected.virtual && <button className="reveal-path" onClick={() => revealPath(selected.path)}>{revealButtonLabel}</button>}
-              {selected.symlink
+              <strong title={selectedTargets.map(item => item.path).join('\n')}>{multipleSelected ? `${selectedTargets.length}개 항목 선택` : selected.virtual ? selected.name : selected.path}</strong>
+              {multipleSelected ? <span>합계 {bytes(selectionBytes)}</span> : <span title={`${deltaSummaryLabel(selected)}${deltaActivityLabel(selected) ? ` · ${deltaActivityLabel(selected)}` : ''}`}>{sizeLabel(selected)} · {deltaValueLabel(selected)}{deltaActivityLabel(selected) ? ` · ${deltaActivityLabel(selected)}` : ''} · {modifiedLabel(selected.modifiedAt)}</span>}
+              {!multipleSelected && !selected.virtual && <button className="reveal-path" onClick={() => revealPath(selected.path)}>{revealButtonLabel}</button>}
+              {selectedTargets.some(item => item.symlink)
                 ? <span className="selection-blocked">심볼릭 링크는 이동할 수 없음</span>
-                : !selected.virtual && <HoldToTrashButton disabled={selected.path === data?.root || loading || refreshing} busy={trashing} onConfirm={trashSelected} hotkeyProgress={trashHotkeyProgress} shortcutLabel={trashShortcutLabel} />}
+                : <HoldToTrashButton key={selectionKey} count={selectedTargets.length} disabled={!canTrashSelected} busy={trashing} onConfirm={trashSelected} hotkeyProgress={trashHotkeyProgress} shortcutLabel={trashShortcutLabel} />}
             </div>
           </div>}
         </footer>
